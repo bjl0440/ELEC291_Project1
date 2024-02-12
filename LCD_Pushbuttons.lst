@@ -1,0 +1,231 @@
+0000              1   ; N76E003 LCD_Pushbuttons.asm: Reads muxed push buttons using one input
+0000              2   
+                  4   $LIST
+0000              6   
+0000              7   ;  N76E003 pinout:
+0000              8   ;                               -------
+0000              9   ;       PWM2/IC6/T0/AIN4/P0.5 -|1    20|- P0.4/AIN5/STADC/PWM3/IC3
+0000             10   ;               TXD/AIN3/P0.6 -|2    19|- P0.3/PWM5/IC5/AIN6
+0000             11   ;               RXD/AIN2/P0.7 -|3    18|- P0.2/ICPCK/OCDCK/RXD_1/[SCL]
+0000             12   ;                    RST/P2.0 -|4    17|- P0.1/PWM4/IC4/MISO
+0000             13   ;        INT0/OSCIN/AIN1/P3.0 -|5    16|- P0.0/PWM3/IC3/MOSI/T1
+0000             14   ;              INT1/AIN0/P1.7 -|6    15|- P1.0/PWM2/IC2/SPCLK
+0000             15   ;                         GND -|7    14|- P1.1/PWM1/IC1/AIN7/CLO
+0000             16   ;[SDA]/TXD_1/ICPDA/OCDDA/P1.6 -|8    13|- P1.2/PWM0/IC0
+0000             17   ;                         VDD -|9    12|- P1.3/SCL/[STADC]
+0000             18   ;            PWM5/IC7/SS/P1.5 -|10   11|- P1.4/SDA/FB/PWM1
+0000             19   ;                               -------
+0000             20   ;
+0000             21   
+0000             22   CLK               EQU 16600000 ; Microcontroller system frequency in Hz
+0000             23   BAUD              EQU 115200 ; Baud rate of UART in bps
+0000             24   TIMER1_RELOAD     EQU (0x100-(CLK/(16*BAUD)))
+0000             25   TIMER0_RELOAD_1MS EQU (0x10000-(CLK/1000))
+0000             26   
+0000             27   ORG 0x0000
+0000 0201B0      28            ljmp main
+0003             29   
+0003             30   ;              1234567890123456    <- This helps determine the location of the counter
+0003 4C434420    31   title:     db 'LCD PUSH BUTTONS', 0
+     50555348
+     20425554
+     544F4E53
+     00
+0014 20202020    32   blank:     db '                ', 0
+     20202020
+     20202020
+     20202020
+     00
+0025             33   
+0025             34   cseg
+0025             35   ; These 'equ' must match the hardware wiring
+0025             36   LCD_RS equ P1.3
+0025             37   LCD_E  equ P1.4
+0025             38   LCD_D4 equ P0.0
+0025             39   LCD_D5 equ P0.1
+0025             40   LCD_D6 equ P0.2
+0025             41   LCD_D7 equ P0.3
+0025             42   
+                 44   $LIST
+00D9             46   
+0000             47   BSEG
+0000             48   ; These five bit variables store the value of the pushbuttons after calling 'LCD_PB' below
+0000             49   PB0: dbit 1
+0001             50   PB1: dbit 1
+0002             51   PB2: dbit 1
+0003             52   PB3: dbit 1
+0004             53   PB4: dbit 1
+0005             54   
+00D9             55   CSEG
+00D9             56   Init_All:
+00D9             57            ; Configure all the pins for biderectional I/O
+00D9 75AC00      58            mov     P3M1, #0x00
+00DC 75AD00      59            mov     P3M2, #0x00
+00DF 75B300      60            mov     P1M1, #0x00
+00E2 75B400      61            mov     P1M2, #0x00
+00E5 75B100      62            mov     P0M1, #0x00
+00E8 75B200      63            mov     P0M2, #0x00
+00EB             64            
+00EB 438E10      65            orl     CKCON, #0x10 ; CLK is the input for timer 1
+00EE 438780      66            orl     PCON, #0x80 ; Bit SMOD=1, double baud rate
+00F1 759852      67            mov     SCON, #0x52
+00F4 53C4DF      68            anl     T3CON, #0b11011111
+00F7 53890F      69            anl     TMOD, #0x0F ; Clear the configuration bits for timer 1
+00FA 438920      70            orl     TMOD, #0x20 ; Timer 1 Mode 2
+00FD 758DF7      71            mov     TH1, #TIMER1_RELOAD ; TH1=TIMER1_RELOAD;
+0100 D28E        72            setb TR1
+0102             73            
+0102             74            ; Using timer 0 for delay functions.  Initialize here:
+0102 C28C        75            clr     TR0 ; Stop timer 0
+0104 438E08      76            orl     CKCON,#0x08 ; CLK is the input for timer 0
+0107 5389F0      77            anl     TMOD,#0xF0 ; Clear the configuration bits for timer 0
+010A 438901      78            orl     TMOD,#0x01 ; Timer 0 in Mode 1: 16-bit timer
+010D             79            
+010D 22          80            ret
+010E             81            
+010E             82   wait_1ms:
+010E C28C        83            clr     TR0 ; Stop timer 0
+0110 C28D        84            clr     TF0 ; Clear overflow flag
+0112 758CBF      85            mov     TH0, #high(TIMER0_RELOAD_1MS)
+0115 758A28      86            mov     TL0,#low(TIMER0_RELOAD_1MS)
+0118 D28C        87            setb TR0
+011A 308DFD      88            jnb     TF0, $ ; Wait for overflow
+011D 22          89            ret
+011E             90   
+011E             91   ; Wait the number of miliseconds in R2
+011E             92   waitms:
+011E 12010E      93            lcall wait_1ms
+0121 DAFB        94            djnz R2, waitms
+0123 22          95            ret
+0124             96   
+0124             97   LCD_PB:
+0124             98            ; Set variables to 1: 'no push button pressed'
+0124 D200        99            setb PB0
+0126 D201       100            setb PB1
+0128 D202       101            setb PB2
+012A D203       102            setb PB3
+012C D204       103            setb PB4
+012E            104            ; The input pin used to check set to '1'
+012E D295       105            setb P1.5
+0130            106            
+0130            107            ; Check if any push button is pressed
+0130 C280       108            clr P0.0
+0132 C281       109            clr P0.1
+0134 C282       110            clr P0.2
+0136 C283       111            clr P0.3
+0138 C293       112            clr P1.3
+013A 20953A     113            jb P1.5, LCD_PB_Done
+013D            114   
+013D            115            ; Debounce
+013D 7A32       116            mov R2, #50
+013F 12011E     117            lcall waitms
+0142 209532     118            jb P1.5, LCD_PB_Done
+0145            119   
+0145            120            ; Set the LCD data pins to logic 1
+0145 D280       121            setb P0.0
+0147 D281       122            setb P0.1
+0149 D282       123            setb P0.2
+014B D283       124            setb P0.3
+014D D293       125            setb P1.3
+014F            126            
+014F            127            ; Check the push buttons one by one
+014F C293       128            clr P1.3
+0151 A295       129            mov c, P1.5
+0153 9204       130            mov PB4, c
+0155 D293       131            setb P1.3
+0157            132   
+0157 C280       133            clr P0.0
+0159 A295       134            mov c, P1.5
+015B 9203       135            mov PB3, c
+015D D280       136            setb P0.0
+015F            137            
+015F C281       138            clr P0.1
+0161 A295       139            mov c, P1.5
+0163 9202       140            mov PB2, c
+0165 D281       141            setb P0.1
+0167            142            
+0167 C282       143            clr P0.2
+0169 A295       144            mov c, P1.5
+016B 9201       145            mov PB1, c
+016D D282       146            setb P0.2
+016F            147            
+016F C283       148            clr P0.3
+0171 A295       149            mov c, P1.5
+0173 9200       150            mov PB0, c
+0175 D283       151            setb P0.3
+0177            152   
+0177            153   LCD_PB_Done:             
+0177 22         154            ret
+0178            155   
+0178            156   Display_PushButtons_LCD:
+0178 C0E0       157            push acc
+017A 7401       157            mov a, #1
+017C 14         157            dec a
+017D 1200BC     157            lcall ?Set_Cursor_2 ; Select column and row
+0180 D0E0       157            pop acc
+0182 7430       158            mov a, #'0'
+0184 A204       159            mov c, PB4
+0186 3400       160            addc a, #0
+0188 120074     161       lcall ?WriteData     
+018B 7430       162            mov a, #'0'
+018D A203       163            mov c, PB3
+018F 3400       164            addc a, #0
+0191 120074     165       lcall ?WriteData     
+0194 7430       166            mov a, #'0'
+0196 A202       167            mov c, PB2
+0198 3400       168            addc a, #0
+019A 120074     169       lcall ?WriteData     
+019D 7430       170            mov a, #'0'
+019F A201       171            mov c, PB1
+01A1 3400       172            addc a, #0
+01A3 120074     173       lcall ?WriteData     
+01A6 7430       174            mov a, #'0'
+01A8 A200       175            mov c, PB0
+01AA 3400       176            addc a, #0
+01AC 120074     177       lcall ?WriteData     
+01AF 22         178            ret
+01B0            179            
+01B0            180   main:
+01B0 75817F     181            mov sp, #0x7f
+01B3 1200D9     182            lcall Init_All
+01B6 12007E     183       lcall LCD_4BIT
+01B9            184       
+01B9            185       ; initial messages in LCD
+01B9 C0E0       186            push acc
+01BB 7401       186            mov a, #1
+01BD 14         186            dec a
+01BE 1200BE     186            lcall ?Set_Cursor_1 ; Select column and row
+01C1 D0E0       186            pop acc
+01C3 C083       187            push dph
+01C5 C082       187            push dpl
+01C7 C0E0       187            push acc
+01C9 900003     187            mov dptr, #Title
+01CC 1200B1     187            lcall ?Send_Constant_String
+01CF D0E0       187            pop acc
+01D1 D082       187            pop dpl
+01D3 D083       187            pop dph
+01D5 C0E0       188            push acc
+01D7 7401       188            mov a, #1
+01D9 14         188            dec a
+01DA 1200BC     188            lcall ?Set_Cursor_2 ; Select column and row
+01DD D0E0       188            pop acc
+01DF C083       189            push dph
+01E1 C082       189            push dpl
+01E3 C0E0       189            push acc
+01E5 900014     189            mov dptr, #blank
+01E8 1200B1     189            lcall ?Send_Constant_String
+01EB D0E0       189            pop acc
+01ED D082       189            pop dpl
+01EF D083       189            pop dph
+01F1            190            
+01F1            191   Forever:
+01F1 120124     192            lcall LCD_PB
+01F4 120178     193            lcall Display_PushButtons_LCD
+01F7            194            
+01F7            195            ; Wait 50 ms between readings
+01F7 7A32       196            mov R2, #50
+01F9 12011E     197            lcall waitms
+01FC            198            
+01FC 0201F1     199            ljmp Forever
+01FF            200            
+01FF            201   END

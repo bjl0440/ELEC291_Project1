@@ -9,6 +9,14 @@ $NOLIST
 ;----------------------------------------------------
 
 CSEG
+
+; Send a character using the serial port
+putchar:
+    jnb TI, putchar
+    clr TI
+    mov SBUF, a
+    ret
+
 ;---------------------------------;
 ; Send a BCD number to PuTTY ;
 ;---------------------------------;
@@ -34,7 +42,6 @@ endmac
     lcall putchar
     pop acc
     ret
-
 
 ;----------------------------------------------------
 ; Converts the 32-bit hex number in 'x' to a 
