@@ -288,17 +288,17 @@ Sum_loop0:
 	Load_y(20)
 	lcall add32
 
-	Load_y(10000)
+	;Load_y(10000) ;This may be too much, try 100
 	lcall mul32
 
 	; Convert to BCD and display
 	lcall hex2bcd
-	;Set_Cursor(1, 13)
+	Set_Cursor(1, 13)
 	;Display_BCD(bcd+3)
 	;Display_BCD(bcd+2)
 	;Display_char(#'.')
 	;Display_BCD(bcd+1)
-	;Display_BCD(bcd+0)
+	Display_BCD(bcd+0)
 	
 	; Wait 50 ms between conversions
 	mov R2, #50
@@ -684,13 +684,12 @@ preheat_state:
 	; if the current temperature is less than 50 degrees, check the state time
 	error: 
 	mov a, state_time
-	subb a, #60
+	subb a, #0x60
 	jc soak_not_reached ; if less than 60 seconds have passed, we have not reached the termination condition
 	ljmp off_state ; if at least 60 seconds have passed, we must terminate the program 
 
 	; if we are not ready to procede to soak, check the stop button
 	soak_not_reached:
-
 	lcall LCD_PB ; check for pushbutton presses
 	jb PB4, check_soak_temp 
 	mov current_state, #0 ; if the stop button is pressed, return to state 0
@@ -721,6 +720,7 @@ soak_state:
 	
 	; check if the state_time is equal to the user set soak_time
 	check_soak_time:
+	lcall Read_Temp 
 	mov a, state_time
 	subb a, soak_time
 	jc  ramp_not_reached ; if have not yet hit then soak_time, check if the stop button has been pressed
@@ -777,7 +777,6 @@ ramp_state:
 	mov current_state, #4
 
 
-
 ; STATE 4 - Reflow State (maintain temperature - power 20%)
 reflow_state:
 
@@ -791,11 +790,15 @@ reflow_state:
 	setb next_state
 
 	; display the working message string
+	WriteCommand(#0x01) ; clear the LCD
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
 	Set_Cursor(2,1)
     Send_Constant_String(#reflow_mgs)
 
 	; check if the state_time is equal to the user set reflow_time
 	check_reflow_time:
+	lcall Read_Temp 
 	mov a, state_time
 	subb a, reflow_time
 	jc  cooling_not_reached ; if we have not yet hit the reflow_time, check if the stop button has been pressed
@@ -818,6 +821,9 @@ cooling:
 	mov pwm, #0 ; set the oven power to 0% in this state
 
 	; display the working message string
+	WriteCommand(#0x01) ; clear the LCD
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
 	Set_Cursor(2,1)
     Send_Constant_String(#cooling_mgs)
 
@@ -847,4 +853,5 @@ cooling:
 	mov a, state_time
 	subb a, #6 ; wait 6 seconds - 2 second period for each speaker play
 	jc loop ; condition not yet met
+	WriteCommand(#0x01)
 	ljmp off_state ; FSM done 
