@@ -58,9 +58,9 @@ SOUND_OUT  equ P0.4 ; Speaker connection
 ; Decleration of one byte current state variable and parameters
 DSEG at 0x30
 Count1ms:      ds 2 ; Used to determine when a second has passed
-soak_temp:     ds 1 ; User set variable for the desired soak temperature
-soak_time:     ds 1 ; User set variable for the length of the soak time
-reflow_temp:   ds 1 ; User set variable for the reflow temperature
+soak_temp:     ds 2 ; User set variable for the desired soak temperature
+soak_time:     ds 2 ; User set variable for the length of the soak time
+reflow_temp:   ds 2 ; User set variable for the reflow temperature
 reflow_time:   ds 1 ; User set variable for timein the reflow state
 current_temp:  ds 1 ; Current temperature in the oven
 state_time:    ds 1 ; Current amount of time we have been in a given state
@@ -91,7 +91,7 @@ CSEG
 ; Strings
 ;                '1234567890123456'
 initial_msg1: DB 'To=   C  Tj=  C ',0
-initial_mgs2: DB 's   ,   r   ,   ',0
+initial_mgs2: DB 's1  ,   r2  ,   ',0
 ;         s=soak temp, soak time   r=reflow temp,reflow time
 
 ;state name messages
@@ -362,6 +362,9 @@ LCD_PB:
 	mov PB4, c
 	setb P0.3
 
+	; If a button was pressed, set the flag
+	mov R3, #1
+
 LCD_PB_Done:		
 	ret
 
@@ -379,6 +382,7 @@ L4: djnz R0, L4 ; 4 cycles->4*60.24ns*104=25.0us
     pop AR1
     pop AR0
     ret
+
 
 ; Main program code begins here!
 initialize:
@@ -433,12 +437,21 @@ initialize:
     Send_Constant_String(#initial_mgs2)
 	
 	; Set the following variables to zero on startup
-	mov a, #0
+	mov a, #0x0
+	da a
 	mov current_state, a
 	mov display_time, a
+	mov a, #0x30
+	da a
 	mov soak_temp, a
+	mov a, #0x60
+	da a
 	mov soak_time, a
+	mov a, #0x00
+	da a
 	mov reflow_temp, a
+	mov a, #0x45
+	da a
 	mov reflow_time, a
 
 
@@ -461,13 +474,13 @@ off_state:
 	setb next_state ; play sound out of the speaker 
 
 	; set the initial values on the screen
-	Set_Cursor(2,2) ; display the initial soak temperature
+	Set_Cursor(2,3) ; display the initial soak temperature
 	Display_BCD(soak_temp)
 
-	Set_Cursor(2,6) ; display the initial soak time
+	Set_Cursor(2,7) ; display the initial soak time
 	Display_BCD(soak_time)
 
-	Set_Cursor(2,10) ; display the initial reflow temperature
+	Set_Cursor(2,11) ; display the initial reflow temperature
 	Display_BCD(reflow_temp)
 
 	Set_Cursor(2,14) ; display the initial reflow time
@@ -476,77 +489,117 @@ off_state:
 	; we first want the user to set the soak temperature
 	soak_temp_button:
 	lcall LCD_PB ; check for pushbutton presses
+	mov r2, #50
+	lcall waitms
+	lcall LCD_PB 
+	
 	jnb PB0, inc_soak_temp ; if the increment button is pressed
 	jnb PB1, dec_soak_temp ; if the decrement button is pressed
 	jnb PB2, soak_time_button ; if the next button is pressed
 	sjmp display_soak_temp ; check button presses again
 
 	inc_soak_temp:
-	inc soak_temp ; increment the soak temperature
+	mov a, soak_temp
+	add a, #0x01
+	da a
+	mov soak_temp, a
 	sjmp display_soak_temp
 
 	dec_soak_temp:
-	dec soak_temp ; decrement the soak temperature
+	mov a, soak_temp
+	add a, #0x99
+	da a
+	mov soak_temp, a
 
 	display_soak_temp:
-	Set_Cursor(2,2) ; display the current soak temperature
+	Set_Cursor(2,3) ; display the current soak temperature
 	Display_BCD(soak_temp)
 	sjmp soak_temp_button
 
 	; next we want to user the set the soak time (in seconds)
 	soak_time_button:
 	lcall LCD_PB ; check for pushbutton presses
+	mov r2, #50
+	lcall waitms
+	lcall LCD_PB
+	
 	jnb PB0, inc_soak_time ; if the increment button is pressed
 	jnb PB1, dec_soak_time ; if the decrement button is pressed
 	jnb PB2, reflow_temp_button ; if the next button is pressed
 	sjmp display_soak_time ; check button presses again
 
 	inc_soak_time:
-	inc soak_time ; increment the soak time
+	mov a, soak_time
+	add a, #0x01
+	da a
+	mov soak_time, a
 	sjmp display_soak_time
 
 	dec_soak_time:
-	dec soak_time ; decrement the soak time
+	mov a, soak_time
+	add a, #0x99
+	da a
+	mov soak_time, a
 	
 	display_soak_time:
-	Set_Cursor(2,6) ; display the current soak time
+	Set_Cursor(2,7) ; display the current soak time
 	Display_BCD(soak_time)
 	sjmp soak_time_button
 
 	; third, we want the user to set the reflow temperature 
 	reflow_temp_button:
 	lcall LCD_PB ; check for pushbutton presses
+	mov r2, #50
+	lcall waitms
+	lcall LCD_PB
+	
 	jnb PB0, inc_reflow_temp ; if the increment button is pressed
 	jnb PB1, dec_reflow_temp ; if the decrement button is pressed
 	jnb PB2, reflow_time_button ; if the next button is pressed
 	sjmp reflow_temp_button ; check button presses again
 
 	inc_reflow_temp:
-	inc reflow_temp ; increment the soak time
+	mov a, reflow_temp
+	add a, #0x01
+	da a
+	mov reflow_temp, a
 	sjmp display_reflow_temp
 
 	dec_reflow_temp:
-	dec reflow_temp ; decrement the reflow temperature 
+	mov a, reflow_temp
+	add a, #0x99
+	da a
+	mov reflow_temp, a
 
 	display_reflow_temp:
-	Set_Cursor(2,10) ; display the current reflow temperature
+	Set_Cursor(2,11) ; display the current reflow temperature
 	Display_BCD(reflow_temp)
 	sjmp reflow_temp_button
 
 	; finally, we want the user to set the reflow time 
 	reflow_time_button:
 	lcall LCD_PB ; check for pushbutton presses
+	mov r2, #50
+	lcall waitms
+	lcall LCD_PB
+	
 	jnb PB0, inc_reflow_time ; if the increment button is pressed
 	jnb PB1, dec_reflow_time ; if the decrement button is pressed
 	jnb PB2, wait_for_start ; if the next button is pressed
 	sjmp reflow_time_button ; check button presses again
 
 	inc_reflow_time:
-	inc reflow_time ; increment the soak time
+	mov a, reflow_time
+	add a, #0x01
+	da a
+	mov reflow_time, a
 	sjmp display_reflow_time
 
 	dec_reflow_time:
-	dec reflow_time ; decrement the reflow temperature 
+	mov a, reflow_time
+	add a, #0x99
+	da a
+	mov reflow_time, a 
 
 	display_reflow_time:
 	Set_Cursor(2,14) ; display the current reflow time
