@@ -90,7 +90,7 @@ CSEG
 
 ; Strings
 ;                '1234567890123456'
-initial_msg1: DB 'To=   C  Tj=  C ',0
+initial_msg1: DB 'To=   C  Tj=20C ',0
 initial_mgs2: DB 's1  ,   r2  ,   ',0
 ;         s=soak temp, soak time   r=reflow temp,reflow time
 
@@ -189,6 +189,9 @@ Timer2_ISR:
 	inc state_time ; It is super easy to keep a seconds count here
 
 	jnb display_time, new_state_noise ; if we are in at least the pre-heat state, begin showing state time on the LCD	Set_Cursor(2,3)
+	mov a, state_time
+	da a 
+	mov state_time, a 
 	Set_Cursor(2,3)
 	Display_BCD(state_time)
 
@@ -290,14 +293,14 @@ Sum_loop0:
 
 	; Convert to BCD and display
 	lcall hex2bcd
-	Set_Cursor(2, 5)
-	Display_BCD(bcd+3)
-	Display_BCD(bcd+2)
-	Display_char(#'.')
-	Display_BCD(bcd+1)
-	Display_BCD(bcd+0)
+	;Set_Cursor(1, 13)
+	;Display_BCD(bcd+3)
+	;Display_BCD(bcd+2)
+	;Display_char(#'.')
+	;Display_BCD(bcd+1)
+	;Display_BCD(bcd+0)
 	
-	; Wait 500 ms between conversions
+	; Wait 50 ms between conversions
 	mov R2, #50
 	lcall waitms
 
@@ -461,11 +464,12 @@ initialize:
 
 ; Start of the finite state machine
 FSM1: 
-	mov a, current_state 
+	mov current_state , #0x00
 
 
 ; STATE 0 - Off State (power 0%)
 off_state:
+	 
 	setb TR2 ; Start Timer 2
 
 	mov pwm, #0 ; set the oven power to 0 in this state
@@ -475,16 +479,16 @@ off_state:
 
 	; set the initial values on the screen
 	Set_Cursor(2,3) ; display the initial soak temperature
-	Display_BCD(soak_temp)
+	Display_BCD(soak_temp+0)
 
 	Set_Cursor(2,7) ; display the initial soak time
-	Display_BCD(soak_time)
+	Display_BCD(soak_time+0)
 
 	Set_Cursor(2,11) ; display the initial reflow temperature
-	Display_BCD(reflow_temp)
+	Display_BCD(reflow_temp+0)
 
 	Set_Cursor(2,14) ; display the initial reflow time
-	Display_BCD(reflow_time)
+	Display_BCD(reflow_time+0)
 
 	; we first want the user to set the soak temperature
 	soak_temp_button:
@@ -499,21 +503,28 @@ off_state:
 	sjmp display_soak_temp ; check button presses again
 
 	inc_soak_temp:
-	mov a, soak_temp
+	mov a, soak_temp+0
 	add a, #0x01
 	da a
-	mov soak_temp, a
+	cjne a, #0x70, continue1
+	mov soak_temp+0, #0x30
 	sjmp display_soak_temp
 
 	dec_soak_temp:
-	mov a, soak_temp
+	mov a, soak_temp+0
 	add a, #0x99
 	da a
-	mov soak_temp, a
+	cjne a, #0x29, continue1
+	mov soak_temp+0, #0x70
+	sjmp display_soak_temp
 
+	continue1:
+	mov soak_temp+0, a
+	sjmp display_soak_temp
+	
 	display_soak_temp:
 	Set_Cursor(2,3) ; display the current soak temperature
-	Display_BCD(soak_temp)
+	Display_BCD(soak_temp+0)
 	sjmp soak_temp_button
 
 	; next we want to user the set the soak time (in seconds)
@@ -529,21 +540,21 @@ off_state:
 	sjmp display_soak_time ; check button presses again
 
 	inc_soak_time:
-	mov a, soak_time
+	mov a, soak_time+0 
 	add a, #0x01
 	da a
 	mov soak_time, a
 	sjmp display_soak_time
 
 	dec_soak_time:
-	mov a, soak_time
+	mov a, soak_time+0
 	add a, #0x99
 	da a
 	mov soak_time, a
 	
 	display_soak_time:
 	Set_Cursor(2,7) ; display the current soak time
-	Display_BCD(soak_time)
+	Display_BCD(soak_time+0)
 	sjmp soak_time_button
 
 	; third, we want the user to set the reflow temperature 
@@ -559,21 +570,30 @@ off_state:
 	sjmp reflow_temp_button ; check button presses again
 
 	inc_reflow_temp:
-	mov a, reflow_temp
+	mov a, reflow_temp+0
 	add a, #0x01
 	da a
-	mov reflow_temp, a
+	cjne a, #0x50, continue3
+	mov reflow_temp+0, #0x00
+	mov reflow_temp+0, a
 	sjmp display_reflow_temp
 
 	dec_reflow_temp:
 	mov a, reflow_temp
 	add a, #0x99
 	da a
-	mov reflow_temp, a
+	cjne a, #0x50, continue3
+	mov reflow_temp+0, #0x50
+	sjmp display_reflow_temp
+
+	continue3:
+	mov reflow_temp+0, a
+	sjmp display_reflow_temp
+	mov reflow_temp+0, a 
 
 	display_reflow_temp:
 	Set_Cursor(2,11) ; display the current reflow temperature
-	Display_BCD(reflow_temp)
+	Display_BCD(reflow_temp+0)
 	sjmp reflow_temp_button
 
 	; finally, we want the user to set the reflow time 
@@ -592,13 +612,21 @@ off_state:
 	mov a, reflow_time
 	add a, #0x01
 	da a
-	mov reflow_time, a
+	cjne a, #0x80, continue4
+	mov reflow_time, #0x40
 	sjmp display_reflow_time
 
 	dec_reflow_time:
 	mov a, reflow_time
 	add a, #0x99
 	da a
+	cjne a, #0x39, continue4
+	mov reflow_time, #0x80
+	sjmp display_reflow_time
+
+	continue4:
+	mov reflow_time, a
+	sjmp display_reflow_time
 	mov reflow_time, a 
 
 	display_reflow_time:
@@ -610,15 +638,20 @@ off_state:
 	; we are now waiting for the user to press the start/stop button (PB4) to begin
 	wait_for_start:
 	lcall LCD_PB ; check for pushbuttons presses
+	mov r2, #50
+	lcall waitms
+	lcall LCD_PB
 	jb PB4, wait_for_start ; infinite loop if the start button is not pressed
-	mov current_state, #1 ; if the start button is pressed, move to state 1 (preheat)
+	ljmp preheat_state
+	;mov current_state, #1 ; if the start button is pressed, move to state 1 (preheat)
 
 
 ; STATE 1 - Preheat State (increase temperature to soak_temp - power 100%), check for it to reach over 50 C within 60 seconds
 preheat_state:
 
-	mov a, current_state
-	cjne a, #1, soak_state ; if current state is not 1, move to state 2
+	WriteCommand(#0x01) ; clear the LCD
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
 	mov pwm, #100 ; set the oven power to 100% in this state
 
 	; reset the state_time
@@ -631,24 +664,22 @@ preheat_state:
 	Set_Cursor(2,1)
     Send_Constant_String(#preheat_mgs)
 
-	check_soak_temp: 
-	; fetch the current temperature
-	lcall Read_Temp
-	; moving the bcd value into current_temp
-	mov current_temp, x+2
+	mov y+0, soak_temp+0
+	mov y+1, soak_temp+1
+	mov y+2, #0
+	mov y+3, #0
 
 	; check if the current temperature is equal to the user set soak temperature
-	mov a, current_temp
-	subb a, soak_temp
-	jc check_for_error ; if have not yet hit the soak temperature, check for error
-	jnc preheat_state_done ; if the current temperature is equal or greater to the soak_temp, the preheat state is done
-	
+	check_soak_temp:
+	lcall Read_Temp 
+	lcall x_gt_y ; sets the mf bit if x > y
+	jb mf, preheat_state_done ; if we have reached the soak_temp, check for an error 
+
 	; check if the current temperature is less than 50 degrees
 	check_for_error:
-	mov a, current_temp
-	subb a, #50
-	jc error ; if temperature is less than 50 degrees, check how much time has passed
-	jnc soak_not_reached ; if temperature is greater than or equal to 50 degrees, we are safe 
+	load_y(50)
+	lcall x_gt_y ; check if the current temperature is greater than 50 degrees
+	jb mf, check_soak_temp ; if we are over 50 degrees, check the temperature again
 
 	; if the current temperature is less than 50 degrees, check the state time
 	error: 
@@ -659,6 +690,7 @@ preheat_state:
 
 	; if we are not ready to procede to soak, check the stop button
 	soak_not_reached:
+
 	lcall LCD_PB ; check for pushbutton presses
 	jb PB4, check_soak_temp 
 	mov current_state, #0 ; if the stop button is pressed, return to state 0
@@ -675,14 +707,17 @@ soak_state:
 	cjne a, #2, ramp_state ; if current state is not 0, move to state 1
 	mov pwm, #20 ; set the oven power to 20% in this state
 
+	WriteCommand(#0x01) ; clear the LCD
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+	; display the working message string
+	Set_Cursor(2,1)
+    Send_Constant_String(#soak_mgs)
+
 	; reset the state_time
 	clr a
 	mov state_time, a
 	setb next_state
-
-	; display the working message string
-	Set_Cursor(2,1)
-    Send_Constant_String(#soak_mgs)
 	
 	; check if the state_time is equal to the user set soak_time
 	check_soak_time:
@@ -813,7 +848,3 @@ cooling:
 	subb a, #6 ; wait 6 seconds - 2 second period for each speaker play
 	jc loop ; condition not yet met
 	ljmp off_state ; FSM done 
-
-	
-
-
