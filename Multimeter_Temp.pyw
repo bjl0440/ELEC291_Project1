@@ -20,9 +20,20 @@ DMMout = StringVar()
 portstatus = StringVar()
 DMM_Name = StringVar()
 connected=0
-global ser
+global ser,thermo_ser
 
-validation_data = []
+
+multimeter_data = []
+thermocouple_data = []
+temp_difference = []
+thermo_ser = serial.Serial(
+ port='COM8',
+ baudrate=115200,
+ parity=serial.PARITY_NONE,
+ stopbits=serial.STOPBITS_TWO,
+ bytesize=serial.EIGHTBITS
+)
+thermo_ser.isOpen()
 
 def Just_Exit():
     top.destroy()
@@ -37,11 +48,15 @@ def update_temp():
         top.after(5000, FindPort) # Not connected, try to reconnect again in 5 seconds
         return
     try:
+
+        thermo_strin = thermo_ser.readline() # Get data from serial port
+        thermo_strin = thermo_strin.rstrip() # Remove trailing characters from the string
+        thermo_strin = thermo_strin.decode() # Change string encoding to utf-8 (compatible with ASCII)
+        tval=round(float(thermo_strin),1) # Convert to float
+        
         strin = ser.readline() # Read the requested value, for example "+0.234E-3 VDC"
         strin = strin.rstrip()
         strin = strin.decode()
-        
-        
         ser.readline() # Read and discard the prompt "=>"
         if len(strin)>1:
             if strin[1]=='>': # Out of sync?
@@ -73,7 +88,9 @@ def update_temp():
        if valid_val == 1 :
            ktemp=round(kconvert.mV_to_C(val, cj),1)
            print(str(ktemp) + ' C')
-           validation_data.append(str(ktemp) + ' C')
+           multimeter_data.append(str(ktemp) + ' C')
+           thermocouple_data.append(' ' + str(tval) + ' C')
+           temp_difference.append(' ' +str(round(tval - ktemp,1) ))
            if ktemp < -200:  
                Temp.set("UNDER")
            elif ktemp > 1372:
@@ -131,6 +148,7 @@ def FindPort():
       portstatus.set("Multimeter not found")
       top.after(5000, FindPort) # Try again in 5 seconds
 
+
 Label(top, text="Cold Junction Temperature:").grid(row=1, column=0)
 Entry(top, bd =1, width=7, textvariable=CJTemp).grid(row=2, column=0)
 Label(top, text="Multimeter reading:").grid(row=3, column=0)
@@ -147,6 +165,6 @@ DMM_Name.set ("--------")
 
 top.after(500, FindPort)
 top.mainloop()
-df = pd.DataFrame(validation_data)
+df = pd.DataFrame({'multimeter': multimeter_data,'thermocouple': thermocouple_data,'diff':temp_difference})
 df.to_csv('csv/validation_data.csv',index=False)
 
