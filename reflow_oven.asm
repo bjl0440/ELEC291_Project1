@@ -457,20 +457,24 @@ initialize:
 ;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; Start of the finite state machine
-FSM1: 
-
-	mov current_state , #0x00
-
 
 ; STATE 0 - Off State (power 0%)
 off_state:
-	 
+
+	clr a	 
 	setb TR2 ; Start Timer 2
 	clr TR0 
 	mov pwm, #0 ; set the oven power to 0 in this state
 	
 	clr cooling_done
 	setb new_state ; play sound out of the speaker 
+
+	; Display the initial strings
+    Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+
+    Set_Cursor(2,1)
+    Send_Constant_String(#initial_mgs2)
 
 	; set the initial values on the screen
 	Set_Cursor(2,3) ; display the initial soak temperature
@@ -643,19 +647,23 @@ off_state:
 ; STATE 1 - Preheat State (increase temperature to soak_temp - power 100%), check for it to reach over 50 C within 60 seconds
 preheat_state:
 
+	clr a 
 	WriteCommand(#0x01) ; clear the LCD
+	mov R2, #2
+	lcall waitms
 	Set_Cursor(1,1)
     Send_Constant_String(#initial_msg1)
 	mov pwm, #100 ; set the oven power to 100% in this state
 
-	; reset the state_time
-	clr a
-	mov state_time, a
 	setb new_state
 
 	; display the working message string
 	Set_Cursor(2,1)
     Send_Constant_String(#preheat_mgs)
+
+	; reset the state_time
+	clr a
+	mov state_time, #0x00
 
 	; check if the current temperature is equal to the user set soak temperature
 	check_soak_temp:
@@ -682,20 +690,20 @@ preheat_state:
 
 	; compare x and y (current temperature vs soak temperature)
 	lcall x_gt_y ; sets the mf bit if x > y
-	jb mf, preheat_state_done ; if we have reached the soak_temp, check for an error 
+	jb mf, soak_state ; if we have reached the soak_temp, check for an error 
 
 	; check if the current temperature is less than 50 degrees
 	check_for_error:
 	load_y(50)
 	lcall x_gt_y ; check if the current temperature is greater than 50 degrees
-	jb mf, check_soak_temp ; if we are over 50 degrees, check the temperature again
+	jb mf, soak_not_reached ; if we are over 50 degrees, check the temperature again
 
 	; if the current temperature is less than 50 degrees, check the state time
-	;error: 
-	;mov R6, state_time
-	;cjne R6, #0x60, soak_not_reached ; if less than 60 seconds have passed, we have not reached the termination condition
-	;WriteCommand(#0x01)
-	;ljmp off_state ; if at least 60 seconds have passed, we must terminate the program 
+	error: 
+	mov R6, #0
+	mov R6, state_time
+	cjne R6, #0x60, soak_not_reached ; if less than 60 seconds have passed, we have not reached the termination condition
+	ljmp off_state ; if at least 60 seconds have passed, we must terminate the program 
 
 	; if we are not ready to procede to soak, check the stop button
 	soak_not_reached:
@@ -703,9 +711,6 @@ preheat_state:
 	jb PB4, check_soak_temp 
 	mov current_state, #0 ; if the stop button is pressed, return to state 0
 	ljmp off_state
-
-	preheat_state_done: 
-	mov current_state, #2
 
 
 ; STATE 2 - Soak State (maintain temperature - power 20%)
