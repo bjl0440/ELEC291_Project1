@@ -63,12 +63,10 @@ soak_time:     ds 2 ; User set variable for the length of the soak time
 reflow_temp:   ds 2 ; User set variable for the reflow temperature
 reflow_time:   ds 1 ; User set variable for timein the reflow state
 current_temp:  ds 1 ; Current temperature in the oven
-current_time:  ds 1 ; Current time placeholder used for LCD purposes
 state_time:    ds 1 ; Current amount of time we have been in a given state
 current_state: ds 1 ; Current state of the finite state machine
 pwm_counter:   ds 1 ; Free running counter 0, 1, 2, ..., 100, 0 used for PWM purposes
 pwm:           ds 1 ; pwm percentage variable - adjust as needed in each state
-
 
 ;for math_32.inc library
 x:   ds 4
@@ -78,23 +76,22 @@ bcd: ds 5
 ; decleration of one bit variables (flags)
 BSEG
 ; These one bit variables store the value of the pushbuttons after calling 'LCD_PB' 
-PB0: 		     dbit 1 ; incremement (INC)
-PB1: 		     dbit 1 ; decremement (DEC)
-PB2: 		     dbit 1 ; next parameter (NXT)
-PB3: 		     dbit 1 ; currently unused (PB3)
-PB4: 		     dbit 1 ; start / emergency stop (EMR)
-display_time:    dbit 1 ; if this flag is set, we want to start displaying the state time
-new_state:       dbit 1 ; if this flag is set, we want to make a speaker beep
-cooling_done:    dbit 1 ; flag set if cooling state is finished
-mf:              dbit 1 ; used for math functions  
-one_second_flag: dbit 1 ; set every 1 second, time displays, then cleared
+PB0: 		   dbit 1 ; incremement (INC)
+PB1: 		   dbit 1 ; decremement (DEC)
+PB2: 		   dbit 1 ; next parameter (NXT)
+PB3: 		   dbit 1 ; currently unused (PB3)
+PB4: 		   dbit 1 ; start / emergency stop (EMR)
+display_time:  dbit 1 ; if this flag is set, we want to start displaying the state time
+next_state:    dbit 1 ; if this flag is set, we want to make a speaker beep
+cooling_done:  dbit 1 ; flag set if cooling state is finished
+mf:            dbit 1 ; used for math functions  
 
 CSEG
 
 ; Strings
 ;                '1234567890123456'
 initial_msg1: DB 'To=   C  Tj=20C ',0
-initial_mgs2: DB 's1  ,   t2  ,   ',0
+initial_mgs2: DB 's1  ,   r2  ,   ',0
 ;         s=soak temp, soak time   r=reflow temp,reflow time
 
 ;state name messages
@@ -189,12 +186,23 @@ Timer2_ISR:
 	mov a, pwm_counter
 	cjne a, #100, Timer2_ISR_done ; check if 1000 ms have passed
 	mov pwm_counter, #0
-	setb one_second_flag ; set this flag every 1 second, display the time, then it gets cleared
-	clr TR0 ; default speaker sound to OFF
+	inc state_time ; It is super easy to keep a seconds count here
 
-	jnb new_state, Timer2_ISR_done ; if we are not entering a new state, jump to the send serial port code
-	cpl TR0 ; Enable timer/counter 0. This line enables the beep sound from the speaker when we enter a new state
-	clr new_state 
+	jnb display_time, new_state_noise ; if we are in at least the pre-heat state, begin showing state time on the LCD	Set_Cursor(2,3)
+	mov a, state_time
+	da a 
+	mov state_time, a 
+	Set_Cursor(2,3)
+	Display_BCD(state_time)
+
+	new_state_noise:
+	jnb next_state, send_serial ; if we are not entering a new state, jump to the send serial port code
+	cpl TR0 ; Enable/disable timer/counter 0. This line enables the beep sound from the speaker when we enter a new state
+	jb cooling_done, send_serial ; if cooling is done, we play the sound 3 times
+	clr next_state
+
+	send_serial:
+	Send_BCD(x) ; Assuming the current temperature is stored in a byte of x
 
 Timer2_ISR_done:
 	pop acc
@@ -208,7 +216,7 @@ Display_formated_BCD:
 	Display_BCD(bcd+4)
 	Display_BCD(bcd+3)
 	Display_BCD(bcd+2)
-	Display_char(#'.')
+	;Display_char(#'.')
 	Display_BCD(bcd+1)
 	Display_BCD(bcd+0)
 	Set_Cursor(2, 6)
@@ -234,9 +242,7 @@ Read_ADC:
     orl a, R0
     mov R0, A
 	ret
-	
-send_serial:
-	Send_BCD(x) ; Assuming the current temperature is stored in a byte of x
+
 
 ; this function reads the overall temperature
 ; (cold + hot) junction and turns the value in bcd
@@ -267,13 +273,13 @@ Sum_loop0:
 	Load_y(4095) ; 2^12-1
 	lcall div32
 
-	;Load_y(1000)
-	;lcall mul32
+	Load_y(1000)
+	lcall mul32
 
 	Load_y(100)
 	lcall mul32
 
-	Load_y(91)
+	Load_y(90909)
 	lcall div32
 
 	Load_y(41)
@@ -282,14 +288,17 @@ Sum_loop0:
 	Load_y(20)
 	lcall add32
 
-	;Load_y(10000) ;This may be too much, try 100
-	;lcall mul32
+	Load_y(10000) ;This may be too much, try 100
+	lcall mul32
 
 	; Convert to BCD and display
 	lcall hex2bcd
 	Set_Cursor(1, 13)
-	Display_BCD(bcd+1)
-	Display_BCD(bcd+0)
+	Display_BCD(bcd+3)
+	Display_BCD(bcd+2)
+	;Display_char(#'.')
+	;Display_BCD(bcd+1)
+	;Display_BCD(bcd+0)
 	
 	; Wait 50 ms between conversions
 	mov R2, #50
@@ -385,9 +394,6 @@ initialize:
 	;; CONFIGURATION ;;
 	;;;;;;;;;;;;;;;;;;;
 
-	; Set the stack pointer!
-	mov sp, #0x7f
-
 	; Configure all the pins for biderectional I/O
 	mov	P3M1, #0x00
 	mov	P3M2, #0x00
@@ -458,7 +464,6 @@ initialize:
 
 ; Start of the finite state machine
 FSM1: 
-
 	mov current_state , #0x00
 
 
@@ -466,11 +471,11 @@ FSM1:
 off_state:
 	 
 	setb TR2 ; Start Timer 2
-	clr TR0 
+
 	mov pwm, #0 ; set the oven power to 0 in this state
 	
 	clr cooling_done
-	setb new_state ; play sound out of the speaker 
+	setb next_state ; play sound out of the speaker 
 
 	; set the initial values on the screen
 	Set_Cursor(2,3) ; display the initial soak temperature
@@ -640,6 +645,7 @@ off_state:
 	ljmp preheat_state
 	;mov current_state, #1 ; if the start button is pressed, move to state 1 (preheat)
 
+
 ; STATE 1 - Preheat State (increase temperature to soak_temp - power 100%), check for it to reach over 50 C within 60 seconds
 preheat_state:
 
@@ -651,7 +657,8 @@ preheat_state:
 	; reset the state_time
 	clr a
 	mov state_time, a
-	setb new_state
+	setb next_state
+	setb display_time
 
 	; display the working message string
 	Set_Cursor(2,1)
@@ -660,20 +667,7 @@ preheat_state:
 	; check if the current temperature is equal to the user set soak temperature
 	check_soak_temp:
 	lcall Read_Temp ; read the current temperature - store result in x
-
-	; every 1 second, update the display
-
-	jnb one_second_flag, read_soak_temp
-	mov a, state_time
-	add a, #0x01
-	da a 
-	mov state_time, a 
-	Set_Cursor(2,3)
-	Display_BCD(state_time)
-	Send_BCD(x)
-	clr one_second_flag
-
-	read_soak_temp:
+	
 	; move the soak_temp variable to y
 	mov y+0, soak_temp+0
 	mov y+1, soak_temp+1
@@ -691,11 +685,11 @@ preheat_state:
 	jb mf, check_soak_temp ; if we are over 50 degrees, check the temperature again
 
 	; if the current temperature is less than 50 degrees, check the state time
-	;error: 
-	;mov R6, state_time
-	;cjne R6, #0x60, soak_not_reached ; if less than 60 seconds have passed, we have not reached the termination condition
-	;WriteCommand(#0x01)
-	;ljmp off_state ; if at least 60 seconds have passed, we must terminate the program 
+	error: 
+	mov a, state_time
+	subb a, #0x60
+	jc soak_not_reached ; if less than 60 seconds have passed, we have not reached the termination condition
+	ljmp off_state ; if at least 60 seconds have passed, we must terminate the program 
 
 	; if we are not ready to procede to soak, check the stop button
 	soak_not_reached:
@@ -710,8 +704,157 @@ preheat_state:
 
 ; STATE 2 - Soak State (maintain temperature - power 20%)
 soak_state: 
+
+	mov a, current_state
+	cjne a, #2, ramp_state ; if current state is not 0, move to state 1
+	mov pwm, #20 ; set the oven power to 20% in this state
+
+	WriteCommand(#0x01) ; clear the LCD
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+	; display the working message string
 	Set_Cursor(2,1)
     Send_Constant_String(#soak_mgs)
-	sjmp soak_state
+
+	; reset the state_time
+	clr a
+	mov state_time, a
+	setb next_state
 	
-END
+	; check if the state_time is equal to the user set soak_time
+	check_soak_time:
+	lcall Read_Temp 
+	mov a, state_time
+	subb a, soak_time
+	jc  ramp_not_reached ; if have not yet hit then soak_time, check if the stop button has been pressed
+	jnc soak_state_done ; if the state_time is equal or greater to the soak_time, proceed to the ramp state
+
+	; if we are not ready to procede to ramp to reflow, check the stop button
+	ramp_not_reached:
+	lcall LCD_PB ; check for pushbutton presses
+	jb PB4, check_soak_time 
+	mov current_state, #0 ; if the stop button is pressed, return to state 0
+	ljmp off_state 
+
+	soak_state_done:
+	mov current_state, #3
+
+
+; STATE 3 - Ramp to Reflow State (increase temperature to reflow_temp - power 100%)	
+ramp_state:
+
+	mov a, current_state
+	cjne a, #3, reflow_state ; if current state is not 3, move to state 4
+	mov pwm, #100 ; set the oven power to 100% in this state
+	
+	; reset the state_time
+	clr a
+	mov state_time, a
+	setb next_state
+
+	; display the working message string
+	Set_Cursor(2,1)
+    Send_Constant_String(#ramp_mgs)
+
+
+	check_ramp_temp: 
+	; fetch the current temperature 
+	lcall Read_Temp
+	; moving the bcd value into current_temp
+	mov current_temp, x+2
+
+	; check if the current temperature is equal to the user set soak temperature
+	mov a, current_temp
+	subb a, reflow_temp
+	jc reflow_not_reached ; if have not yet hit the reflow temperature, check if the stop button is pressed
+	jnc ramp_state_done  ; if the current temperature is equal or greater to the reflow_temp, the ramp state is done
+
+	; if we are not ready to procede to reflow, check the stop button
+	reflow_not_reached:
+	lcall LCD_PB ; check for pushbutton presses
+	jb PB4, check_ramp_temp 
+	mov current_state, #0 ; if the stop button is pressed, return to state 0
+	ljmp off_state
+
+	ramp_state_done: 
+	mov current_state, #4
+
+
+; STATE 4 - Reflow State (maintain temperature - power 20%)
+reflow_state:
+
+	mov a, current_state
+	cjne a, #4, cooling ; if current state is not 4, move to state 5
+	mov pwm, #20 ; set the oven power to 20% in this state
+
+	; reset the state_time
+	clr a
+	mov state_time, a
+	setb next_state
+
+	; display the working message string
+	WriteCommand(#0x01) ; clear the LCD
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+	Set_Cursor(2,1)
+    Send_Constant_String(#reflow_mgs)
+
+	; check if the state_time is equal to the user set reflow_time
+	check_reflow_time:
+	lcall Read_Temp 
+	mov a, state_time
+	subb a, reflow_time
+	jc  cooling_not_reached ; if we have not yet hit the reflow_time, check if the stop button has been pressed
+	jnc reflow_state_done ; if the state_time is equal or greater to the reflow_time, proceed to the cooling state
+
+	; if we are not ready to procede to ramp to reflow, check the stop button
+	cooling_not_reached:
+	lcall LCD_PB ; check for pushbutton presses
+	jb PB4, check_reflow_time 
+	mov current_state, #0 ; if the stop button is pressed, return to state 0
+	ljmp off_state 
+
+	reflow_state_done:
+	mov current_state, #5
+
+
+; STATE 5 - Cooling (power fully off)
+cooling:
+
+	mov pwm, #0 ; set the oven power to 0% in this state
+
+	; display the working message string
+	WriteCommand(#0x01) ; clear the LCD
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+	Set_Cursor(2,1)
+    Send_Constant_String(#cooling_mgs)
+
+	; reset the state_time
+	clr a
+	mov state_time, a
+	setb next_state
+
+	check_cooling_temp: 
+	; fetch the current temperature 
+	lcall Read_Temp
+	; moving the bcd value into current_temp
+	mov current_temp, bcd+2
+
+	; check if the current temperature is equal to the user set soak temperature
+	mov a, current_temp
+	subb a, #60
+	jc cooling_state_done ; if the current temperature is less than 60 degrees, we have finished the cooling stage
+	jnc check_cooling_temp  ; if the current temperature is greater than or equal to 60 degrees, check the temperature again
+
+	cooling_state_done:
+	mov current_state, #0
+	clr display_time
+	mov state_time, #0
+
+	loop:
+	mov a, state_time
+	subb a, #6 ; wait 6 seconds - 2 second period for each speaker play
+	jc loop ; condition not yet met
+	WriteCommand(#0x01)
+	ljmp off_state ; FSM done 
