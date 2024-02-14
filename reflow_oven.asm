@@ -59,7 +59,8 @@ SOUND_OUT  equ P0.4 ; Speaker connection
 DSEG at 0x30
 Count1ms:      ds 2 ; Used to determine when a second has passed
 soak_temp:     ds 1 ; User set variable for the desired soak temperature
-soak_time:     ds 1 ; User set variable for the length of the soak time
+soak_time:     ds 2 ; User set variable for the length of the soak time
+current_soak_time: ds 2
 reflow_temp:   ds 2 ; User set variable for the reflow temperature
 reflow_time:   ds 1 ; User set variable for timein the reflow state
 current_temp:  ds 1 ; Current temperature in the oven
@@ -70,12 +71,11 @@ pwm_counter:   ds 1 ; Free running counter 0, 1, 2, ..., 100, 0 used for PWM pur
 pwm:           ds 1 ; pwm percentage variable - adjust as needed in each state
 
 
-
 ;for math_32.inc library
 x:   ds 4
 y:   ds 4
 bcd: ds 5
-VLED_ADC: ds 2
+
 ; decleration of one bit variables (flags)
 BSEG
 ; These one bit variables store the value of the pushbuttons after calling 'LCD_PB' 
@@ -89,14 +89,13 @@ new_state:          dbit 1 ; if this flag is set, we want to make a speaker beep
 cooling_done:       dbit 1 ; flag set if cooling state is finished
 mf:                 dbit 1 ; used for math functions  
 one_second_flag:    dbit 1 ; set every 1 second, time displays, then cleared
-soak_time_hundreds: dbit 1 ; set when we need to display the soak_time as number > 100
 
 CSEG
 
 ; Strings
 ;                '1234567890123456'
 initial_msg1: DB 'To=    C  Tj=20C',0
-initial_mgs2: DB 's1  ,    r2  ,  ',0
+initial_mgs2: DB 's1  ,    r   ,  ',0
 ;         s=soak temp, soak time   r=reflow temp,reflow time
 
 ;state name messages
@@ -241,43 +240,30 @@ Read_ADC:
 ; this function reads the overall temperature
 ; (cold + hot) junction and turns the value in bcd
 Read_Temp:
-	; Read the 2.08V LED voltage connected to AIN0 on pin 6
-	anl ADCCON0, #0xF0
-	orl ADCCON0, #0x00 ; Select channel 0
-
-	lcall Read_ADC
-	; Save result for later use
-	mov VLED_ADC+0, R0
-	mov VLED_ADC+1, R1
-
 	; Read the signal connected to AIN7
 	anl ADCCON0, #0xF0
 	orl ADCCON0, #0x07 ; Select channel 7
-	mov r5, #100
-	Load_x(0)
-	
 Average_ADC:
+	Load_x(0)
+	mov r5, #100
+Sum_loop0:
 	lcall Read_ADC
+    
+    ; Convert to voltage
 	mov y+0, R0
 	mov y+1, R1
-	; Pad other bits with zero
 	mov y+2, #0
 	mov y+3, #0
-	
+
 	lcall add32
-	djnz r5, Average_ADC
-	
+	djnz r5, Sum_loop0
+
 	Load_y(100)
 	lcall div32
-    
-	Load_y(20080) ; The MEASURED LED voltage: 2.074V, with 4 decimal places
+
+	Load_y(51400) ; VCC voltage measured
 	lcall mul32
-	; Retrive the ADC LED value
-	mov y+0, VLED_ADC+0
-	mov y+1, VLED_ADC+1
-	; Pad other bits with zero
-	mov y+2, #0
-	mov y+3, #0
+	Load_y(4095) ; 2^12-1
 	lcall div32
 
 	;Load_y(1000)
@@ -308,7 +294,7 @@ Average_ADC:
     Display_char(#'=')
 	
 	; Wait 50 ms between conversions
-	mov R2, #50
+	mov R2, #100
 	lcall waitms
 
 	ret
@@ -423,15 +409,15 @@ initialize:
 	setb TR1
 
 	; Initialize the pin used by the ADC (P1.1) as input.
-	orl	P1M1, #0b10000010
-	anl	P1M2, #0b01111101
+	orl	P1M1, #0b00000010
+	anl	P1M2, #0b11111101
 	
 	; Initialize and start the ADC:
 	anl ADCCON0, #0xF0
 	orl ADCCON0, #0x07 ; Select channel 7
 	; AINDIDS select if some pins are analog inputs or digital I/O:
 	mov AINDIDS, #0x00 ; Disable all analog inputs
-	orl AINDIDS, #0b10000001 ; P1.1 is analog input
+	orl AINDIDS, #0b10000000 ; P1.1 is analog input
 	orl ADCCON1, #0x01 ; Enable ADC
 	
 	; Initialize the Timers
@@ -451,20 +437,32 @@ initialize:
 	
 	; Set the following variables to zero on startup
 	mov a, #0x0
-	da a
+	;da a
 	mov current_state, a
 	mov display_time, a
+	;mov current_soak_time, a
+
 	mov a, #0x30
-	da a
+	;da a
 	mov soak_temp, a
-	mov a, #0x60
-	da a
-	mov soak_time, a
-	mov a, #0x00
-	da a
-	mov reflow_temp, a
+	
+	Load_x(60)
+	mov soak_time+0, x+0
+	mov soak_time+1, x+1
+	mov soak_time+2, #0
+	mov soak_time+3, #0
+
+	;mov a, #0x200
+	;da a
+	Load_x(200)
+	mov reflow_temp+0, x+0
+	mov reflow_temp+1, x+1
+	mov reflow_temp+2, #0
+	mov reflow_temp+3, #0
+	;mov reflow_temp, #0x200
+
 	mov a, #0x45
-	da a
+	;da a
 	mov reflow_time, a
 
 
@@ -478,7 +476,6 @@ initialize:
 off_state:
 
 	clr a	 
-	clr soak_time_hundreds
 	setb TR2 ; Start Timer 2
 	clr TR0 
 	mov pwm, #0 ; set the oven power to 0 in this state
@@ -490,21 +487,41 @@ off_state:
     Set_Cursor(1,1)
     Send_Constant_String(#initial_msg1)
 
-    Set_Cursor(2,1)
+	Set_Cursor(2,1)
     Send_Constant_String(#initial_mgs2)
 
 	; set the initial values on the screen
 	Set_Cursor(2,3) ; display the initial soak temperature
 	Display_BCD(soak_temp)
 
-	Set_Cursor(2,7) ; display the initial soak time
-	Display_BCD(soak_time)
+	Set_Cursor(2,5) ; display the initial soak time
+	mov x+0, soak_time+0
+	mov x+1, soak_time+1
+	mov x+2, #0
+	mov x+3, #0
+	lcall hex2bcd
+	Display_BCD(bcd+1)
+	Display_BCD(bcd+0)
+	Set_Cursor(2,5)
+	Display_char(#',')
 
-	Set_Cursor(2,12) ; display the initial reflow temperature
-	Display_BCD(reflow_temp)
+	Set_Cursor(2,10) ; display the initial reflow temperature
+	mov x+0, reflow_temp+0
+	mov x+1, reflow_temp+1
+	mov x+2, #0
+	mov x+3, #0
+	lcall hex2bcd
+
+	Display_BCD(bcd+1)
+	Display_BCD(bcd+0)
+
+	Set_Cursor(2,10)
+	Display_char(#'r')
+	Set_Cursor(2,14)
+	Display_char(#',')
 
 	Set_Cursor(2,15) ; display the initial reflow time
-	Display_BCD(reflow_time)
+	Display_BCD(reflow_time+0)
 
 	; we first want the user to set the soak temperature
 	soak_temp_button:
@@ -556,35 +573,28 @@ off_state:
 	sjmp display_soak_time ; check button presses again
 
 	inc_soak_time:
-	mov a, soak_time
-	add a, #0x01
-	da a
-	cjne a, #0x00, continue2
-	setb soak_time_hundreds
-	mov soak_time, a
+	inc soak_time
 	sjmp display_soak_time
 	
 	dec_soak_time:
-	mov a, soak_time
-	add a, #0x99
-	da a
-	cjne a, #0x99, continue2
-	clr soak_time_hundreds
-	mov soak_time, a
+	dec soak_time
+	;mov soak_time, a
 	
 	continue2:
-	mov soak_time, a
+	;mov soak_time, a
 	sjmp display_soak_time
 
 	display_soak_time:
-	Set_Cursor(2,7) ; display the current soak time
-	Display_BCD(soak_time)
-	Set_Cursor(2,6)
-	jnb soak_time_hundreds, hundreds_clear
-	Display_char(#'1')
-	sjmp soak_time_button
-	hundreds_clear:
-	Display_char(#' ')
+	Set_Cursor(2,5) ; display the initial soak time
+	mov x+0, soak_time+0
+	mov x+1, soak_time+1
+	mov x+2, #0
+	mov x+3, #0
+	lcall hex2bcd
+	Display_BCD(bcd+1)
+	Display_BCD(bcd+0)
+	Set_Cursor(2,5)
+	Display_char(#',')
 	sjmp soak_time_button
 
 	; third, we want the user to set the reflow temperature 
@@ -600,29 +610,44 @@ off_state:
 	sjmp reflow_temp_button ; check button presses again
 
 	inc_reflow_temp:
-	mov a, reflow_temp+0
-	add a, #0x01
-	da a
-	cjne a, #0x50, continue3
-	mov reflow_temp+0, #0x00
+	;mov a, reflow_temp+0
+	;add a, #0x01
+	;da a
+	;cjne a, #0x50, continue3
+	;mov reflow_temp+0, #0x00
+	;mov reflow_temp+0, a
+	
+	inc reflow_temp
 	sjmp display_reflow_temp
 
 	dec_reflow_temp:
-	mov a, reflow_temp+0
-	add a, #0x99
-	da a
-	cjne a, #0x50, continue3
-	mov reflow_temp+0, #0x50
+	dec reflow_temp	
 	sjmp display_reflow_temp
 
 	continue3:
 	mov reflow_temp+0, a
 	sjmp display_reflow_temp
-	mov reflow_temp, a 
+	mov reflow_temp+0, a 
 
 	display_reflow_temp:
-	Set_Cursor(2,12) ; display the current reflow temperature
-	Display_BCD(reflow_temp+0)
+	;Set_Cursor(2,12) ; display the current reflow temperature
+	;Display_BCD(reflow_temp+0)
+
+	Set_Cursor(2,10) ; display the initial reflow temperature
+	mov x+0, reflow_temp+0
+	mov x+1, reflow_temp+1
+	mov x+2, #0
+	mov x+3, #0
+	lcall hex2bcd
+
+	Display_BCD(bcd+1)
+	Display_BCD(bcd+0)
+
+	Set_Cursor(2,10)
+	Display_char(#'r')
+	Set_Cursor(2,14)
+	Display_char(#',')
+
 	sjmp reflow_temp_button
 
 	; finally, we want the user to set the reflow time 
@@ -677,8 +702,6 @@ off_state:
 ; STATE 1 - Preheat State (increase temperature to soak_temp - power 100%), check for it to reach over 50 C within 60 seconds
 preheat_state:
 
-	ljmp ramp_state
-
 	clr a 
 	WriteCommand(#0x01) ; clear the LCD
 	mov R2, #2
@@ -702,11 +725,9 @@ preheat_state:
 
 	; check if the current temperature is equal to the user set soak temperature
 	check_soak_temp:
-	lcall Read_Temp ; read the current temperature - store result in x
-
 	; every 1 second, update the display
-
 	jnb one_second_flag, read_soak_temp
+	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
 	da a 
@@ -775,18 +796,10 @@ soak_state:
 	clr a
 	mov state_time, a
 
-	jnb soak_time_hundreds, check_soak_time
-	;clr c
-	mov a, soak_time
-	add a, #100
-	;da a 
-	mov soak_time, a
-
 	check_soak_time:
-	lcall Read_Temp ; read the current temperature - store result in x
-
 	; every 1 second, update the display
 	jnb one_second_flag, read_soak_time
+	lcall Read_Temp ; read the current temperature - store result in x
 	mov a, state_time
 	add a, #0x01
 	da a 
@@ -805,10 +818,16 @@ soak_state:
 	clr one_second_flag
 
 	read_soak_time:
-	mov a, state_time
-	;da a
-	cjne a, soak_time, soak_time_not_reached
-	ljmp ramp_state
+	mov x+0, soak_time
+	mov x+1, #0
+	mov x+2, #0
+	mov x+3, #0
+
+	lcall hex2bcd
+	mov a, bcd+0
+	
+	cjne a, state_time, soak_time_not_reached
+	sjmp ramp_state
 
 	soak_time_not_reached:
 	lcall LCD_PB ; check for pushbutton presses
@@ -822,51 +841,30 @@ ramp_state:
 	WriteCommand(#0x01) ; clear the LCD
 	mov R2, #2
 	lcall waitms
+
 	Set_Cursor(1,1)
     Send_Constant_String(#initial_msg1)
 	mov pwm, #100 ; set the oven power to 100% in this state
 	
-	setb new_state
+	; reset the state_time
+	clr a
+	mov state_time, a
 
+	setb new_state
 	; display the working message string
 	Set_Cursor(2,1)
     Send_Constant_String(#ramp_mgs)
 
-	; reset the state_time
-	clr a
-	mov state_time, #0x00
-
-	; hex adjust the reflow_temp variable
-
-	mov a, #0x02
-	mov reflow_temp+1, a ; value in reflow_temp is a 3 digit BCD (_2_user set tens digit_user set ones_)
-
-	; we move this BCD into register x
-	mov bcd+0, reflow_temp+0
-	mov bcd+1, reflow_temp+1
-	mov bcd+2, #0
-	mov bcd+3, #0
-	mov bcd+4, #0
-
-	; convert the value of reflow_temp (currently a BCD of the form written above to hex)
-	lcall bcd2hex
-
-	; move the value in x (the hex value of reflow_temp back into reflow_temp)
-	mov reflow_temp+0, x+0
-	mov reflow_temp+1, x+1
-	mov reflow_temp+2, x+2 
-	mov reflow_temp+3, x+3
-
-	; we should get the hex value of the BCD _2_user set tens digit_user set ones_
-
-	check_reflow_temp:
+	; reading the ramp temperature to determine if we should enter
+	; reflow
+	check_ramp_temp:
 	; every 1 second, update the display
 	jnb one_second_flag, read_ramp_temp
-	lcall Read_Temp ; read the current temperature
-	mov a, state_time ; incrememnt the state time
+	lcall Read_Temp ; read the current temperature - store result in x
+	mov a, state_time
 	add a, #0x01
 	da a 
-	mov state_time, a ; display the BCD formatted state time
+	mov state_time, a
 	Set_Cursor(2,3)
 	Display_BCD(state_time)
 	Send_BCD(bcd+2)
@@ -880,28 +878,96 @@ ramp_state:
     lcall putchar
 	clr one_second_flag
 
-	; compare reflow_temp (hex) to current temp (hex)
-
-	; move the reflow_temp variable to y
+	read_ramp_temp:
+	; moving the reflow temp value into y
 	mov y+0, reflow_temp+0
 	mov y+1, reflow_temp+1
 	mov y+2, #0
 	mov y+3, #0
 
-	; compare x and y (current temperature vs reflow temperature)	
-	lcall x_gt_y ; sets the mf bit if x > y
-	jb mf, end_state ; if we have reached the reflow_temp 
+	; check if the current temperature is equal to the user set soak temperature
+	lcall x_gt_y
+	jb mf, reflow_state
 
-	; if we are not ready to procede to soak, check the stop button
+	; if we are not ready to procede to reflow, check the stop button
 	reflow_not_reached:
 	lcall LCD_PB ; check for pushbutton presses
-	jb PB4, check_reflow_temp ; if the stop button has not been pressed, repeat the cycle again
+	jb PB4, check_ramp_temp 
+	mov current_state, #0 ; if the stop button is pressed, return to state 0
 	ljmp off_state
 
-	end_state:
-	Set_Cursor(2,6)
-	Display_char(#'*')
-	sjmp end_state
+	ramp_state_done: 
+	mov current_state, #4
+
+; STATE 4 - Reflow State (maintain temperature - power 20%)
+reflow_state:
+
+	clr a 
+	WriteCommand(#0x01) ; clear the LCD
+	mov R2, #2
+	lcall waitms
+
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+	mov pwm, #20 ; set the oven power to 20% in this state
+	
+	setb new_state
+	; display the working message string
+	Set_Cursor(2,1)
+    Send_Constant_String(#reflow_mgs)
+
+	; reset the state_time
+	clr a
+	mov state_time, a
+
+	check_reflow_time:
+	; every 1 second, update the display
+	jnb one_second_flag, read_reflow_time
+	lcall Read_Temp ; read the current temperature - store result in x
+	mov a, state_time
+	add a, #0x01
+	da a 
+	mov state_time, a
+	Set_Cursor(2,3)
+	Display_BCD(state_time)
+	Send_BCD(bcd+2)
+	; write decimal point
+    mov a, #0x2E ; ASCII for '.'
+    lcall putchar
+	Send_BCD(bcd+1)
+	Send_BCD(bcd+0)
+	; write newline character
+    mov a, #0x0A
+    lcall putchar
+	clr one_second_flag
+	
+	read_reflow_time:
+	mov a, reflow_time
+	cjne a, state_time, reflow_time_not_reached
+	sjmp cooling_state
+
+	reflow_time_not_reached:
+	lcall LCD_PB ; check for pushbutton presses
+	jb PB4, check_reflow_time 
+	ljmp off_state
+
+
+cooling_state:
+
+	mov pwm, #0
+
+	setb new_state
+	; display the working message string
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+	Set_Cursor(2,1)
+    Send_Constant_String(#cooling_mgs)
+
+	sjmp cooling_state
+
+	check_cooling_temp:
+	lcall Read_Temp
+
 
 
 END
