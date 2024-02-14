@@ -58,7 +58,7 @@ SOUND_OUT  equ P0.4 ; Speaker connection
 ; Decleration of one byte current state variable and parameters
 DSEG at 0x30
 Count1ms:      ds 2 ; Used to determine when a second has passed
-soak_temp:     ds 2 ; User set variable for the desired soak temperature
+soak_temp:     ds 1 ; User set variable for the desired soak temperature
 soak_time:     ds 2 ; User set variable for the length of the soak time
 reflow_temp:   ds 2 ; User set variable for the reflow temperature
 reflow_time:   ds 1 ; User set variable for timein the reflow state
@@ -93,8 +93,8 @@ CSEG
 
 ; Strings
 ;                '1234567890123456'
-initial_msg1: DB 'To=   C  Tj=20C ',0
-initial_mgs2: DB 's1  ,   t2  ,   ',0
+initial_msg1: DB 'To=    C  Tj=20C',0
+initial_mgs2: DB 's1  ,    r2  ,  ',0
 ;         s=soak temp, soak time   r=reflow temp,reflow time
 
 ;state name messages
@@ -235,8 +235,6 @@ Read_ADC:
     mov R0, A
 	ret
 	
-send_serial:
-	Send_BCD(x) ; Assuming the current temperature is stored in a byte of x
 
 ; this function reads the overall temperature
 ; (cold + hot) junction and turns the value in bcd
@@ -287,9 +285,12 @@ Sum_loop0:
 
 	; Convert to BCD and display
 	lcall hex2bcd
-	Set_Cursor(1, 13)
+	Set_Cursor(1, 4)
 	Display_BCD(bcd+1)
 	Display_BCD(bcd+0)
+
+	WriteCommand(#0x82)
+    Display_char(#'=')
 	
 	; Wait 50 ms between conversions
 	mov R2, #50
@@ -443,10 +444,10 @@ initialize:
 	mov soak_temp, a
 	mov a, #0x60
 	da a
-	mov soak_time, a
+	mov soak_time+0, a
 	mov a, #0x00
 	da a
-	mov reflow_temp, a
+	mov reflow_temp+0, a
 	mov a, #0x45
 	da a
 	mov reflow_time, a
@@ -478,15 +479,15 @@ off_state:
 
 	; set the initial values on the screen
 	Set_Cursor(2,3) ; display the initial soak temperature
-	Display_BCD(soak_temp+0)
+	Display_BCD(soak_temp)
 
 	Set_Cursor(2,7) ; display the initial soak time
 	Display_BCD(soak_time+0)
 
-	Set_Cursor(2,11) ; display the initial reflow temperature
+	Set_Cursor(2,12) ; display the initial reflow temperature
 	Display_BCD(reflow_temp+0)
 
-	Set_Cursor(2,14) ; display the initial reflow time
+	Set_Cursor(2,15) ; display the initial reflow time
 	Display_BCD(reflow_time+0)
 
 	; we first want the user to set the soak temperature
@@ -502,28 +503,28 @@ off_state:
 	sjmp display_soak_temp ; check button presses again
 
 	inc_soak_temp:
-	mov a, soak_temp+0
+	mov a, soak_temp
 	add a, #0x01
 	da a
 	cjne a, #0x70, continue1
-	mov soak_temp+0, #0x30
+	mov soak_temp, #0x30
 	sjmp display_soak_temp
 
 	dec_soak_temp:
-	mov a, soak_temp+0
+	mov a, soak_temp
 	add a, #0x99
 	da a
 	cjne a, #0x29, continue1
-	mov soak_temp+0, #0x70
+	mov soak_temp, #0x70
 	sjmp display_soak_temp
 
 	continue1:
-	mov soak_temp+0, a
+	mov soak_temp, a
 	sjmp display_soak_temp
 	
 	display_soak_temp:
 	Set_Cursor(2,3) ; display the current soak temperature
-	Display_BCD(soak_temp+0)
+	Display_BCD(soak_temp)
 	sjmp soak_temp_button
 
 	; next we want to user the set the soak time (in seconds)
@@ -591,7 +592,7 @@ off_state:
 	mov reflow_temp+0, a 
 
 	display_reflow_temp:
-	Set_Cursor(2,11) ; display the current reflow temperature
+	Set_Cursor(2,12) ; display the current reflow temperature
 	Display_BCD(reflow_temp+0)
 	sjmp reflow_temp_button
 
@@ -629,7 +630,7 @@ off_state:
 	mov reflow_time, a 
 
 	display_reflow_time:
-	Set_Cursor(2,14) ; display the current reflow time
+	Set_Cursor(2,15) ; display the current reflow time
 	Display_BCD(reflow_time)
 	sjmp reflow_time_button 
 
@@ -656,6 +657,9 @@ preheat_state:
 	mov pwm, #100 ; set the oven power to 100% in this state
 
 	setb new_state
+	mov a, soak_temp
+	add a, #81
+	mov soak_temp, a
 
 	; display the working message string
 	Set_Cursor(2,1)
@@ -683,8 +687,8 @@ preheat_state:
 
 	read_soak_temp:
 	; move the soak_temp variable to y
-	mov y+0, soak_temp+0
-	mov y+1, soak_temp+1
+	mov y+0, soak_temp
+	mov y+1, #0
 	mov y+2, #0
 	mov y+3, #0
 
