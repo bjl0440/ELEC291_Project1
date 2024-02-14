@@ -78,16 +78,17 @@ bcd: ds 5
 ; decleration of one bit variables (flags)
 BSEG
 ; These one bit variables store the value of the pushbuttons after calling 'LCD_PB' 
-PB0: 		     dbit 1 ; incremement (INC)
-PB1: 		     dbit 1 ; decremement (DEC)
-PB2: 		     dbit 1 ; next parameter (NXT)
-PB3: 		     dbit 1 ; currently unused (PB3)
-PB4: 		     dbit 1 ; start / emergency stop (EMR)
-display_time:    dbit 1 ; if this flag is set, we want to start displaying the state time
-new_state:       dbit 1 ; if this flag is set, we want to make a speaker beep
-cooling_done:    dbit 1 ; flag set if cooling state is finished
-mf:              dbit 1 ; used for math functions  
-one_second_flag: dbit 1 ; set every 1 second, time displays, then cleared
+PB0: 		        dbit 1 ; incremement (INC)
+PB1: 		        dbit 1 ; decremement (DEC)
+PB2: 		        dbit 1 ; next parameter (NXT)
+PB3: 		        dbit 1 ; currently unused (PB3)
+PB4: 		        dbit 1 ; start / emergency stop (EMR)
+display_time:       dbit 1 ; if this flag is set, we want to start displaying the state time
+new_state:          dbit 1 ; if this flag is set, we want to make a speaker beep
+cooling_done:       dbit 1 ; flag set if cooling state is finished
+mf:                 dbit 1 ; used for math functions  
+one_second_flag:    dbit 1 ; set every 1 second, time displays, then cleared
+soak_time_hundreds: dbit 1 ; set when we need to display the soak_time as number > 100
 
 CSEG
 
@@ -463,6 +464,7 @@ initialize:
 off_state:
 
 	clr a	 
+	clr soak_time_hundreds
 	setb TR2 ; Start Timer 2
 	clr TR0 
 	mov pwm, #0 ; set the oven power to 0 in this state
@@ -540,21 +542,35 @@ off_state:
 	sjmp display_soak_time ; check button presses again
 
 	inc_soak_time:
-	mov a, soak_time+0 
+	mov a, soak_time
 	add a, #0x01
 	da a
+	cjne a, #0x00, continue2
+	setb soak_time_hundreds
+	mov soak_time, a
+	sjmp display_soak_time
+	
+	dec_soak_time:
+	mov a, soak_time
+	add a, #0x99
+	da a
+	cjne a, #0x99, continue2
+	clr soak_time_hundreds
+	mov soak_time, a
+	
+	continue2:
 	mov soak_time, a
 	sjmp display_soak_time
 
-	dec_soak_time:
-	mov a, soak_time+0
-	add a, #0x99
-	da a
-	mov soak_time, a
-	
 	display_soak_time:
 	Set_Cursor(2,7) ; display the current soak time
-	Display_BCD(soak_time+0)
+	Display_BCD(soak_time)
+	Set_Cursor(2,6)
+	jnb soak_time_hundreds, hundreds_clear
+	Display_char(#'1')
+	sjmp soak_time_button
+	hundreds_clear:
+	Display_char(#' ')
 	sjmp soak_time_button
 
 	; third, we want the user to set the reflow temperature 
@@ -682,7 +698,15 @@ preheat_state:
 	mov state_time, a 
 	Set_Cursor(2,3)
 	Display_BCD(state_time)
-	Send_BCD(x)
+	Send_BCD(bcd+2)
+	; write decimal point
+    mov a, #0x2E ; ASCII for '.'
+    lcall putchar
+	Send_BCD(bcd+1)
+	Send_BCD(bcd+0)
+	; write newline character
+    mov a, #0x0A
+    lcall putchar
 	clr one_second_flag
 
 	read_soak_temp:
@@ -713,14 +737,86 @@ preheat_state:
 	soak_not_reached:
 	lcall LCD_PB ; check for pushbutton presses
 	jb PB4, check_soak_temp 
-	mov current_state, #0 ; if the stop button is pressed, return to state 0
 	ljmp off_state
 
 
 ; STATE 2 - Soak State (maintain temperature - power 20%)
 soak_state: 
+	
+	clr a
+	WriteCommand(#0x01) ; clear the LCD
+	mov R2, #2
+	lcall waitms
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+	mov pwm, #20 ; set the oven power to 100% in this state
+	setb new_state
+	
+	; display the working message string
 	Set_Cursor(2,1)
     Send_Constant_String(#soak_mgs)
-	sjmp soak_state
+
+	; reset the state_time
+	clr a
+	mov state_time, a
+	sjmp check_soak_time
+
+	jnb soak_time_hundreds, check_soak_time
+	mov a, soak_time
+	add a, #81
+	mov soak_time, a
+
+	check_soak_time:
+	lcall Read_Temp ; read the current temperature - store result in x
+
+	; every 1 second, update the display
+	jnb one_second_flag, read_soak_time
+	mov a, state_time
+	add a, #0x01
+	da a 
+	mov state_time, a
+	Set_Cursor(2,3)
+	Display_BCD(state_time)
+	Send_BCD(bcd+2)
+	; write decimal point
+    mov a, #0x2E ; ASCII for '.'
+    lcall putchar
+	Send_BCD(bcd+1)
+	Send_BCD(bcd+0)
+	; write newline character
+    mov a, #0x0A
+    lcall putchar
+	clr one_second_flag
+
+	read_soak_time:
+	mov a, soak_time
+	cjne a, state_time, soak_time_not_reached
+	ljmp ramp_state
+
+	soak_time_not_reached:
+	lcall LCD_PB ; check for pushbutton presses
+	jb PB4, check_soak_time 
+	ljmp off_state
+
+; STATE 3 - Ramp to Reflow State (increase temperature to reflow_temp - power 100%)
+ramp_state:
+	clr a 
+	WriteCommand(#0x01) ; clear the LCD
+	mov R2, #2
+	lcall waitms
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+	mov pwm, #100 ; set the oven power to 100% in this state
 	
+	setb new_state
+	; display the working message string
+	Set_Cursor(2,1)
+    Send_Constant_String(#ramp_mgs)
+
+	
+
+
+
+	
+
 END
