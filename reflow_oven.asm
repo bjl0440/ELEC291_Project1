@@ -1,4 +1,4 @@
-; Implementation of the finite state machine to control the stages of the reflow oven
+ ; Implementation of the finite state machine to control the stages of the reflow oven
 
 $NOLIST
 $MODN76E003
@@ -702,6 +702,8 @@ off_state:
 ; STATE 1 - Preheat State (increase temperature to soak_temp - power 100%), check for it to reach over 50 C within 60 seconds
 preheat_state:
 
+	ljmp reflow_state
+
 	clr a 
 	WriteCommand(#0x01) ; clear the LCD
 	mov R2, #2
@@ -896,8 +898,6 @@ ramp_state:
 	mov current_state, #0 ; if the stop button is pressed, return to state 0
 	ljmp off_state
 
-	ramp_state_done: 
-	mov current_state, #4
 
 ; STATE 4 - Reflow State (maintain temperature - power 20%)
 reflow_state:
@@ -951,23 +951,63 @@ reflow_state:
 	jb PB4, check_reflow_time 
 	ljmp off_state
 
-
+; STATE 5 - Cooling (maintain temperature - power 20%)
 cooling_state:
 
-	mov pwm, #0
+	clr a 
+	WriteCommand(#0x01) ; clear the LCD
+	mov R2, #2
+	lcall waitms
+
+	Set_Cursor(1,1)
+    Send_Constant_String(#initial_msg1)
+	mov pwm, #0 ; set the oven power to 100% in this state
+	
+	; reset the state_time
+	clr a
+	mov state_time, a
 
 	setb new_state
 	; display the working message string
-	Set_Cursor(1,1)
-    Send_Constant_String(#initial_msg1)
 	Set_Cursor(2,1)
     Send_Constant_String(#cooling_mgs)
 
-	sjmp cooling_state
-
+	; reading the ramp temperature to determine if we should enter
+	; reflow
 	check_cooling_temp:
-	lcall Read_Temp
+	; every 1 second, update the display
+	jnb one_second_flag, read_cooling_temp
+	lcall Read_Temp ; read the current temperature - store result in x
+	mov a, state_time
+	add a, #0x01
+	da a 
+	mov state_time, a
+	Set_Cursor(2,3)
+	Display_BCD(state_time)
+	Send_BCD(bcd+2)
+	; write decimal point
+    mov a, #0x2E ; ASCII for '.'
+    lcall putchar
+	Send_BCD(bcd+1)
+	Send_BCD(bcd+0)
+	; write newline character
+    mov a, #0x0A
+    lcall putchar
+	clr one_second_flag
 
+	read_cooling_temp:
+	load_y(60)
+	; check if the current temperature is equal to the user set soak temperature
+	lcall x_lt_y ; mf = 1 if x < y  
+	jb mf, jumper
 
+	; if we are not ready to procede to reflow, check the stop button
+	cooling_not_reached:
+	lcall LCD_PB ; check for pushbutton presses
+	jb PB4, check_cooling_temp 
+	mov current_state, #0 ; if the stop button is pressed, return to state 0
+
+	jumper:
+	ljmp off_state
 
 END
