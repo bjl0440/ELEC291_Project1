@@ -201,3 +201,12 @@ Display_char mac
 	pop acc
 endmac
 
+;------------------------------------;
+; Send a char to serial port         ;
+;------------------------------------;
+Send_char mac
+	push acc
+	mov a, %0
+	lcall putchar
+	pop acc
+endmac

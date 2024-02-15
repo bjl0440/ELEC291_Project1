@@ -1,4 +1,6 @@
- ; Implementation of the finite state machine to control the stages of the reflow oven
+;Final oven.2
+
+; Implementation of the finite state machine to control the stages of the reflow oven
 
 $NOLIST
 $MODN76E003
@@ -66,10 +68,11 @@ reflow_time:   ds 1 ; User set variable for timein the reflow state
 current_temp:  ds 1 ; Current temperature in the oven
 current_time:  ds 1 ; Current time placeholder used for LCD purposes
 state_time:    ds 1 ; Current amount of time we have been in a given state
+state_time_hunds: ds 1; hundreds place of the state temp
 current_state: ds 1 ; Current state of the finite state machine
 pwm_counter:   ds 1 ; Free running counter 0, 1, 2, ..., 100, 0 used for PWM purposes
 pwm:           ds 1 ; pwm percentage variable - adjust as needed in each state
-
+VLED_ADC: ds 2
 
 ;for math_32.inc library
 x:   ds 4
@@ -94,7 +97,7 @@ CSEG
 
 ; Strings
 ;                '1234567890123456'
-initial_msg1: DB 'To=    C  Tj=20C',0
+initial_msg1: DB 'To=020C   Tj=20C',0
 initial_mgs2: DB 's1  ,    r   ,  ',0
 ;         s=soak temp, soak time   r=reflow temp,reflow time
 
@@ -128,8 +131,8 @@ Timer0_Init:
 	anl a, #0xf0 ; 11110000 Clear the bits for timer 0
 	orl a, #0x01 ; 00000001 Configure timer 0 as 16-timer
 	mov TMOD, a
-	mov TH0, #high(TIMER0_RELOAD)
-	mov TL0, #low(TIMER0_RELOAD)
+	mov TH0, #high(TIMER0_RELOAD) 
+	mov TL0, #low(TIMER0_RELOAD) 
 	; Enable the timer and interrupts
     setb ET0  ; Enable timer 0 interrupt
     setb TR0  ; Start timer 0
@@ -194,8 +197,8 @@ Timer2_ISR:
 	clr TR0 ; default speaker sound to OFF
 
 	jnb new_state, Timer2_ISR_done ; if we are not entering a new state, jump to the send serial port code
-	cpl TR0 ; Enable timer/counter 0. This line enables the beep sound from the speaker when we enter a new state
-	clr new_state 
+	setb TR0 ; Enable timer/counter 0. This line enables the beep sound from the speaker when we enter a new state
+	clr new_state
 
 Timer2_ISR_done:
 	pop acc
@@ -241,44 +244,71 @@ Read_ADC:
 ; (cold + hot) junction and turns the value in bcd
 Read_Temp:
 	; Read the signal connected to AIN7
-	anl ADCCON0, #0xF0
+	anl ADCCON0, #0xF0 
 	orl ADCCON0, #0x07 ; Select channel 7
+
+;Average_ADC:
+;	Load_x(0)
+;	mov r5, #0x100
+;Sum_loop0:
+
+; Read the 2.08V LED voltage connected to AIN0 on pin 6
+	;anl ADCCON0, #0xF0
+	;orl ADCCON0, #0x00 ; Select channel 0
+
+	;lcall Read_ADC
+	; Save result for later use
+	;mov VLED_ADC+0, R0
+	;mov VLED_ADC+1, R1
 Average_ADC:
 	Load_x(0)
 	mov r5, #100
-Sum_loop0:
+
+	anl ADCCON0, #0xF0
+	orl ADCCON0, #0x07 ; Select channel 7
+Sum_Loop:
+	; Read the signal connected to AIN7
 	lcall Read_ADC
     
     ; Convert to voltage
 	mov y+0, R0
 	mov y+1, R1
+	; Pad other bits with zero
 	mov y+2, #0
 	mov y+3, #0
-
 	lcall add32
-	djnz r5, Sum_loop0
+	djnz r5, Sum_Loop
 
 	Load_y(100)
 	lcall div32
-
-	Load_y(51400) ; VCC voltage measured
+	
+	;Load_y(20740) ; The MEASURED LED voltage: 2.074V, with 4 decimal places
+	Load_y(50600) ; VCC voltage measured
 	lcall mul32
 	Load_y(4095) ; 2^12-1
 	lcall div32
+	; Retrive the ADC LED value
+	;mov y+0, VLED_ADC+0
+	;mov y+1, VLED_ADC+1
+	; Pad other bits with zero
+	;mov y+2, #0
+	;mov y+3, #0
+	;lcall div32
 
-	;Load_y(1000)
+
+	;Load_y(100)
 	;lcall mul32
 
 	Load_y(100)
 	lcall mul32
 
-	Load_y(91)
+	Load_y(297)
 	lcall div32
 
 	Load_y(41)
 	lcall div32
 
-	Load_y(20)
+	Load_y(28)
 	lcall add32
 
 	;Load_y(10000) ;This may be too much, try 100
@@ -409,15 +439,15 @@ initialize:
 	setb TR1
 
 	; Initialize the pin used by the ADC (P1.1) as input.
-	orl	P1M1, #0b00000010
-	anl	P1M2, #0b11111101
+	orl	P1M1, #0b10000010
+	anl	P1M2, #0b01111101
 	
 	; Initialize and start the ADC:
 	anl ADCCON0, #0xF0
 	orl ADCCON0, #0x07 ; Select channel 7
 	; AINDIDS select if some pins are analog inputs or digital I/O:
 	mov AINDIDS, #0x00 ; Disable all analog inputs
-	orl AINDIDS, #0b10000000 ; P1.1 is analog input
+	orl AINDIDS, #0b10000001 ; P1.1 is analog input
 	orl ADCCON1, #0x01 ; Enable ADC
 	
 	; Initialize the Timers
@@ -440,6 +470,7 @@ initialize:
 	;da a
 	mov current_state, a
 	mov display_time, a
+	mov state_time_hunds, a
 	;mov current_soak_time, a
 
 	mov a, #0x30
@@ -480,8 +511,8 @@ off_state:
 	clr TR0 
 	mov pwm, #0 ; set the oven power to 0 in this state
 	
-	clr cooling_done
-	setb new_state ; play sound out of the speaker 
+	clr a
+	clr cooling_done 
 
 	; Display the initial strings
     Set_Cursor(1,1)
@@ -701,13 +732,11 @@ off_state:
 
 ; STATE 1 - Preheat State (increase temperature to soak_temp - power 100%), check for it to reach over 50 C within 60 seconds
 preheat_state:
-
-	ljmp reflow_state
-
+ 
 	clr a 
 	WriteCommand(#0x01) ; clear the LCD
 	mov R2, #2
-	lcall waitms
+	lcall waitms 
 	Set_Cursor(1,1)
     Send_Constant_String(#initial_msg1)
 	mov pwm, #100 ; set the oven power to 100% in this state
@@ -729,17 +758,31 @@ preheat_state:
 	check_soak_temp:
 	; every 1 second, update the display
 	jnb one_second_flag, read_soak_temp
+	clr TR0
 	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
 	da a 
-	mov state_time, a 
+	mov state_time, a
+	cjne a, #0x00, display_time_preheat
+	mov a, state_time_hunds
+	add a, #0x01
+	da a 
+	mov state_time_hunds, a
+
+	display_time_preheat: 
 	Set_Cursor(2,3)
+	Display_BCD(state_time_hunds)
+	Set_Cursor(2,5)
 	Display_BCD(state_time)
-	Send_BCD(bcd+2)
-	; write decimal point
-    mov a, #0x2E ; ASCII for '.'
+
+	; send the letter A to the serial
+    mov a, #0x41 ; ASCII for 'A'
     lcall putchar
+	;Send_BCD(bcd+2)
+	; write decimal point
+    ;mov a, #0x2E ; ASCII for '.'
+    ;lcall putchar
 	Send_BCD(bcd+1)
 	Send_BCD(bcd+0)
 	; write newline character
@@ -774,8 +817,11 @@ preheat_state:
 	; if we are not ready to procede to soak, check the stop button
 	soak_not_reached:
 	lcall LCD_PB ; check for pushbutton presses
-	jb PB4, check_soak_temp 
+	jb PB4, sjmp_helper_1 
 	ljmp off_state
+
+	sjmp_helper_1:
+	ljmp check_soak_temp
 
 
 ; STATE 2 - Soak State (maintain temperature - power 20%)
@@ -787,9 +833,9 @@ soak_state:
 	lcall waitms
 	Set_Cursor(1,1)
     Send_Constant_String(#initial_msg1)
-	mov pwm, #20 ; set the oven power to 100% in this state
+	mov pwm, #15 ; set the oven power to 100% in this state
+
 	setb new_state
-	
 	; display the working message string
 	Set_Cursor(2,1)
     Send_Constant_String(#soak_mgs)
@@ -801,17 +847,31 @@ soak_state:
 	check_soak_time:
 	; every 1 second, update the display
 	jnb one_second_flag, read_soak_time
-	lcall Read_Temp ; read the current temperature - store result in x
+	clr TR0
+	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
 	da a 
 	mov state_time, a
+	cjne a, #0x00, display_times_soak
+	mov a, state_time_hunds
+	add a, #0x01
+	da a 
+	mov state_time_hunds, a
+
+	display_times_soak: 
 	Set_Cursor(2,3)
+	Display_BCD(state_time_hunds)
+	Set_Cursor(2,5)
 	Display_BCD(state_time)
-	Send_BCD(bcd+2)
-	; write decimal point
-    mov a, #0x2E ; ASCII for '.'
+
+	; send the letter B to the serial
+    mov a, #0x42 ; ASCII for 'B'
     lcall putchar
+	;Send_BCD(bcd+2)
+	; write decimal point
+    ;mov a, #0x2E ; ASCII for '.'
+    ;lcall putchar
 	Send_BCD(bcd+1)
 	Send_BCD(bcd+0)
 	; write newline character
@@ -862,17 +922,31 @@ ramp_state:
 	check_ramp_temp:
 	; every 1 second, update the display
 	jnb one_second_flag, read_ramp_temp
-	lcall Read_Temp ; read the current temperature - store result in x
+	clr TR0
+	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
 	da a 
 	mov state_time, a
+	cjne a, #0x00, display_times_ramp
+	mov a, state_time_hunds
+	add a, #0x01
+	da a 
+	mov state_time_hunds, a
+
+	display_times_ramp: 
 	Set_Cursor(2,3)
+	Display_BCD(state_time_hunds)
+	Set_Cursor(2,5)
 	Display_BCD(state_time)
-	Send_BCD(bcd+2)
-	; write decimal point
-    mov a, #0x2E ; ASCII for '.'
+
+	; send the letter C to the serial
+    mov a, #0x43 ; ASCII for 'C'
     lcall putchar
+	;Send_BCD(bcd+2)
+	; write decimal point
+    ;mov a, #0x2E ; ASCII for '.'
+    ;lcall putchar
 	Send_BCD(bcd+1)
 	Send_BCD(bcd+0)
 	; write newline character
@@ -909,7 +983,7 @@ reflow_state:
 
 	Set_Cursor(1,1)
     Send_Constant_String(#initial_msg1)
-	mov pwm, #20 ; set the oven power to 20% in this state
+	mov pwm, #15 ; set the oven power to 20% in this state
 	
 	setb new_state
 	; display the working message string
@@ -923,17 +997,31 @@ reflow_state:
 	check_reflow_time:
 	; every 1 second, update the display
 	jnb one_second_flag, read_reflow_time
-	lcall Read_Temp ; read the current temperature - store result in x
+	clr TR0
+	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
 	da a 
 	mov state_time, a
+	cjne a, #0x00, display_time_reflow
+	mov a, state_time_hunds
+	add a, #0x01
+	da a 
+	mov state_time_hunds, a
+
+	display_time_reflow: 
 	Set_Cursor(2,3)
+	Display_BCD(state_time_hunds)
+	Set_Cursor(2,5)
 	Display_BCD(state_time)
-	Send_BCD(bcd+2)
-	; write decimal point
-    mov a, #0x2E ; ASCII for '.'
+
+	; send the letter D to the serial
+    mov a, #0x44; ASCII for 'D'
     lcall putchar
+	;Send_BCD(bcd+2)
+	; write decimal point
+    ;mov a, #0x2E ; ASCII for '.'
+    ;lcall putchar
 	Send_BCD(bcd+1)
 	Send_BCD(bcd+0)
 	; write newline character
@@ -951,7 +1039,7 @@ reflow_state:
 	jb PB4, check_reflow_time 
 	ljmp off_state
 
-; STATE 5 - Cooling (maintain temperature - power 20%)
+; STATE 5 - Cooling State (no power, resets when it is below 60C)
 cooling_state:
 
 	clr a 
@@ -977,17 +1065,31 @@ cooling_state:
 	check_cooling_temp:
 	; every 1 second, update the display
 	jnb one_second_flag, read_cooling_temp
-	lcall Read_Temp ; read the current temperature - store result in x
+	clr TR0
+	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
 	da a 
 	mov state_time, a
+	cjne a, #0x00, display_times_cool
+	mov a, state_time_hunds
+	add a, #0x01
+	da a 
+	mov state_time_hunds, a
+
+	display_times_cool: 
 	Set_Cursor(2,3)
+	Display_BCD(state_time_hunds)
+	Set_Cursor(2,5)
 	Display_BCD(state_time)
-	Send_BCD(bcd+2)
-	; write decimal point
-    mov a, #0x2E ; ASCII for '.'
+
+	; send the letter E to the serial
+    mov a, #0x45 ; ASCII for 'E'
     lcall putchar
+	;Send_BCD(bcd+2)
+	; write decimal point
+    ;mov a, #0x2E ; ASCII for '.'
+    ;lcall putchar
 	Send_BCD(bcd+1)
 	Send_BCD(bcd+0)
 	; write newline character
@@ -1011,3 +1113,6 @@ cooling_state:
 	ljmp off_state
 
 END
+
+
+
