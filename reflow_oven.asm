@@ -92,6 +92,7 @@ new_state:          dbit 1 ; if this flag is set, we want to make a speaker beep
 cooling_done:       dbit 1 ; flag set if cooling state is finished
 mf:                 dbit 1 ; used for math functions  
 one_second_flag:    dbit 1 ; set every 1 second, time displays, then cleared
+played:             dbit 1 ; for speaker control
 
 CSEG
 
@@ -197,8 +198,12 @@ Timer2_ISR:
 	clr TR0 ; default speaker sound to OFF
 
 	jnb new_state, Timer2_ISR_done ; if we are not entering a new state, jump to the send serial port code
-	setb TR0 ; Enable timer/counter 0. This line enables the beep sound from the speaker when we enter a new state
-	clr new_state
+		jnb played, else_played ; if the speaker has beeped once already, this bit is set
+			clr TR0 ; turn off timer 0
+			clr new_state ; clear the new state
+		else_played:
+			setb TR0 ; Enable timer/counter 0. This line enables the beep sound from the speaker when we enter a new state
+			setb played ; set the played bit
 
 Timer2_ISR_done:
 	pop acc
@@ -514,6 +519,10 @@ off_state:
 	clr a
 	clr cooling_done 
 
+	; this code enables the buzzer beep when entering a zero
+	setb new_state
+	clr played
+	
 	; Display the initial strings
     Set_Cursor(1,1)
     Send_Constant_String(#initial_msg1)
@@ -741,10 +750,13 @@ preheat_state:
     Send_Constant_String(#initial_msg1)
 	mov pwm, #100 ; set the oven power to 100% in this state
 
-	setb new_state
 	mov a, soak_temp
 	add a, #81
 	mov soak_temp, a
+
+	; this code enables the buzzer beep when entering a zero
+	setb new_state
+	clr played
 
 	; display the working message string
 	Set_Cursor(2,1)
@@ -758,7 +770,6 @@ preheat_state:
 	check_soak_temp:
 	; every 1 second, update the display
 	jnb one_second_flag, read_soak_temp
-	clr TR0
 	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
@@ -777,12 +788,20 @@ preheat_state:
 	Display_BCD(state_time)
 
 	; send the letter A to the serial
-    mov a, #0x41 ; ASCII for 'A'
+	mov a, bcd+1
+	mov bcd+3, a
+	mov a, bcd+0
+	mov bcd+2, a
+	Send_BCD(bcd+3)
+	Send_BCD(bcd+2)
+	; give the state input
+	mov a, #0x41 ; ASCII for 'A'
     lcall putchar
-	;Send_BCD(bcd+2)
-	; write decimal point
-    ;mov a, #0x2E ; ASCII for '.'
-    ;lcall putchar
+	mov a, soak_temp
+	add a, #0x01
+	da a
+	mov bcd+0, a
+	mov bcd+1, #0
 	Send_BCD(bcd+1)
 	Send_BCD(bcd+0)
 	; write newline character
@@ -790,6 +809,7 @@ preheat_state:
     lcall putchar
 	clr one_second_flag
 
+	
 	read_soak_temp:
 	; move the soak_temp variable to y
 	mov y+0, soak_temp
@@ -817,10 +837,10 @@ preheat_state:
 	; if we are not ready to procede to soak, check the stop button
 	soak_not_reached:
 	lcall LCD_PB ; check for pushbutton presses
-	jb PB4, sjmp_helper_1 
+	jb PB4, jump_helper_1 
 	ljmp off_state
 
-	sjmp_helper_1:
+	jump_helper_1:
 	ljmp check_soak_temp
 
 
@@ -835,7 +855,10 @@ soak_state:
     Send_Constant_String(#initial_msg1)
 	mov pwm, #15 ; set the oven power to 100% in this state
 
+	; this code enables the buzzer beep when entering a zero
 	setb new_state
+	clr played
+
 	; display the working message string
 	Set_Cursor(2,1)
     Send_Constant_String(#soak_mgs)
@@ -847,7 +870,6 @@ soak_state:
 	check_soak_time:
 	; every 1 second, update the display
 	jnb one_second_flag, read_soak_time
-	clr TR0
 	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
@@ -866,12 +888,24 @@ soak_state:
 	Display_BCD(state_time)
 
 	; send the letter B to the serial
-    mov a, #0x42 ; ASCII for 'B'
-    lcall putchar
 	;Send_BCD(bcd+2)
 	; write decimal point
     ;mov a, #0x2E ; ASCII for '.'
     ;lcall putchar
+	mov a, bcd+1
+	mov bcd+3, a
+	mov a, bcd+0
+	mov bcd+2, a
+	Send_BCD(bcd+3)
+	Send_BCD(bcd+2)
+	; give the state input
+	mov a, #0x42 ; ASCII for 'B'
+    lcall putchar
+	mov a, soak_time
+	add a, #0x01
+	da a
+	mov bcd+0, a
+	mov bcd+1, #0
 	Send_BCD(bcd+1)
 	Send_BCD(bcd+0)
 	; write newline character
@@ -893,8 +927,11 @@ soak_state:
 
 	soak_time_not_reached:
 	lcall LCD_PB ; check for pushbutton presses
-	jb PB4, check_soak_time 
+	jb PB4, jump_helper_2 
 	ljmp off_state
+
+	jump_helper_2:
+	ljmp check_soak_time
 
 ; STATE 3 - Ramp to Reflow State (increase temperature to reflow_temp - power 100%)
 ramp_state:
@@ -908,6 +945,10 @@ ramp_state:
     Send_Constant_String(#initial_msg1)
 	mov pwm, #100 ; set the oven power to 100% in this state
 	
+	; this code enables the buzzer beep when entering a zero
+	setb new_state
+	clr played
+
 	; reset the state_time
 	clr a
 	mov state_time, a
@@ -921,8 +962,13 @@ ramp_state:
 	; reflow
 	check_ramp_temp:
 	; every 1 second, update the display
-	jnb one_second_flag, read_ramp_temp
-	clr TR0
+	jnb one_second_flag, jump_helper_5
+	sjmp check_some_time
+	
+	jump_helper_5:
+	ljmp read_ramp_temp
+
+	check_some_time:
 	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
@@ -941,12 +987,27 @@ ramp_state:
 	Display_BCD(state_time)
 
 	; send the letter C to the serial
-    mov a, #0x43 ; ASCII for 'C'
-    lcall putchar
 	;Send_BCD(bcd+2)
 	; write decimal point
     ;mov a, #0x2E ; ASCII for '.'
     ;lcall putchar
+	mov a, bcd+1
+	mov bcd+3, a
+	mov a, bcd+0
+	mov bcd+2, a
+	Send_BCD(bcd+3)
+	Send_BCD(bcd+2)
+	mov a, #0x43 ; ASCII for 'C'
+    lcall putchar
+	; give the state input
+	mov a, reflow_temp+0
+	add a, #0x01
+	da a
+	mov bcd+0, a
+	mov a, reflow_temp+1
+	add a, #0x01
+	da a
+	mov bcd+1, a
 	Send_BCD(bcd+1)
 	Send_BCD(bcd+0)
 	; write newline character
@@ -968,9 +1029,11 @@ ramp_state:
 	; if we are not ready to procede to reflow, check the stop button
 	reflow_not_reached:
 	lcall LCD_PB ; check for pushbutton presses
-	jb PB4, check_ramp_temp 
-	mov current_state, #0 ; if the stop button is pressed, return to state 0
+	jb PB4, jump_helper_3 
 	ljmp off_state
+
+	jump_helper_3:
+	ljmp check_ramp_temp
 
 
 ; STATE 4 - Reflow State (maintain temperature - power 20%)
@@ -985,7 +1048,10 @@ reflow_state:
     Send_Constant_String(#initial_msg1)
 	mov pwm, #15 ; set the oven power to 20% in this state
 	
+	; this code enables the buzzer beep when entering a zero
 	setb new_state
+	clr played
+
 	; display the working message string
 	Set_Cursor(2,1)
     Send_Constant_String(#reflow_mgs)
@@ -997,7 +1063,6 @@ reflow_state:
 	check_reflow_time:
 	; every 1 second, update the display
 	jnb one_second_flag, read_reflow_time
-	clr TR0
 	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
@@ -1016,12 +1081,24 @@ reflow_state:
 	Display_BCD(state_time)
 
 	; send the letter D to the serial
-    mov a, #0x44; ASCII for 'D'
-    lcall putchar
 	;Send_BCD(bcd+2)
 	; write decimal point
     ;mov a, #0x2E ; ASCII for '.'
     ;lcall putchar
+	mov a, bcd+1
+	mov bcd+3, a
+	mov a, bcd+0
+	mov bcd+2, a
+	Send_BCD(bcd+3)
+	Send_BCD(bcd+2)
+	; give the state input
+	mov a, #0x44; ASCII for 'D'
+    lcall putchar
+	mov a, reflow_time
+	add a, #0x01
+	da a
+	mov bcd+0, a
+	mov bcd+1, #0
 	Send_BCD(bcd+1)
 	Send_BCD(bcd+0)
 	; write newline character
@@ -1036,8 +1113,11 @@ reflow_state:
 
 	reflow_time_not_reached:
 	lcall LCD_PB ; check for pushbutton presses
-	jb PB4, check_reflow_time 
+	jb PB4, jump_helper_4 
 	ljmp off_state
+
+	jump_helper_4:
+	ljmp check_reflow_time
 
 ; STATE 5 - Cooling State (no power, resets when it is below 60C)
 cooling_state:
@@ -1055,7 +1135,10 @@ cooling_state:
 	clr a
 	mov state_time, a
 
+	; this code enables the buzzer beep when entering a zero
 	setb new_state
+	clr played
+
 	; display the working message string
 	Set_Cursor(2,1)
     Send_Constant_String(#cooling_mgs)
@@ -1065,7 +1148,6 @@ cooling_state:
 	check_cooling_temp:
 	; every 1 second, update the display
 	jnb one_second_flag, read_cooling_temp
-	clr TR0
 	lcall Read_Temp
 	mov a, state_time
 	add a, #0x01
